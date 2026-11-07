@@ -887,6 +887,9 @@ class Compiler:
         impl = getattr(self, "fn_" + name.replace(".", "_"), None)
         if impl is not None:
             return impl(node.args)
+        custom = (getattr(self.catalog, "custom_functions", None) or {}).get(name)
+        if custom is not None:
+            return self.custom_call(name, custom, node.args)
         spec = SCALAR_FUNCS.get(name)
         if spec is not None:
             lo, hi, fn = spec
@@ -897,6 +900,20 @@ class Compiler:
                 self.volatile = True
             return self.lift(fn, vals)
         raise FormulaError("#NAME?", f"Unknown function: {name}")
+
+    def custom_call(self, name: str, meta: dict, args) -> S | A:
+        """A Python function registered with @ps.function (a DuckDB UDF)."""
+        params = meta["params"]
+        if len(args) != len(params):
+            raise FormulaError("#N/A", f"{name} expects {len(params)} argument(s)")
+        conv = {NUM: num_nullable, STR: txt, BOOL: boo, DATE: as_date, TS: as_ts}
+        vals = [self.comp(a) for a in args]
+
+        def f(*xs):
+            parts = [conv[t](x) for x, t in zip(xs, params, strict=True)]
+            return S(f"{meta['sql']}({', '.join(parts)})", meta["ret"])
+
+        return self.lift(f, vals)
 
     def _args(self, args, lo, hi=None, name=""):
         if len(args) < lo or (hi is not None and len(args) > hi):

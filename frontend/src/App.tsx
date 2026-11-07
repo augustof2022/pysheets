@@ -1,5 +1,5 @@
 import { Upload } from "lucide-react";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { rpc } from "./api";
 import { BusyBar, FormulaBar, SheetTabs, Toasts, TopBar } from "./components/Chrome";
 import { FloatingMenu } from "./components/Menu";
@@ -8,13 +8,22 @@ import Grid from "./grid/Grid";
 import { Dialogs } from "./panels/Dialogs";
 import { CommandPalette, FilterPopover, FindReplace } from "./panels/Popovers";
 import { SidePanel } from "./panels/SidePanels";
+import { enableScripts, openScripts } from "./scripts";
+import { ShieldAlert } from "lucide-react";
 import { handleShortcut } from "./shortcuts";
 import { openDialog, refreshInfo, toast, useApp } from "./store";
+
+const ScriptEditor = lazy(() => import("./panels/ScriptEditor"));
 
 export default function App() {
   const theme = useApp((s) => s.theme);
   const info = useApp((s) => s.info);
   const menu = useApp((s) => s.menu);
+  const scriptsOpen = useApp((s) => s.scriptsOpen);
+  const [scriptsEverOpened, setScriptsEverOpened] = useState(false);
+  useEffect(() => {
+    if (scriptsOpen) setScriptsEverOpened(true);
+  }, [scriptsOpen]);
   const [dropping, setDropping] = useState(false);
 
   useEffect(() => {
@@ -24,7 +33,7 @@ export default function App() {
   useEffect(() => {
     refreshInfo().catch((e) => toast(String(e), "error"));
     rpc<string[]>("functions")
-      .then(({ result }) => useApp.setState({ functions: result }))
+      .then(({ result }) => useApp.setState({ functions: result, builtinFunctions: result }))
       .catch(() => undefined);
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
@@ -103,6 +112,18 @@ export default function App() {
       <TopBar />
       <Toolbar />
       <FormulaBar />
+      {info && !info.scripts_trusted && (
+        <div className="trust-banner pop-in">
+          <ShieldAlert size={16} />
+          <span>This workbook contains Python scripts. They stay off until you enable them — custom functions show #NAME? meanwhile.</span>
+          <button className="btn ghost sm" onClick={openScripts}>
+            Review code
+          </button>
+          <button className="btn primary sm" onClick={enableScripts}>
+            Enable scripts
+          </button>
+        </div>
+      )}
       <main className="workspace">
         <div className="grid-wrap">
           {info ? <Grid /> : <div className="boot"><span className="mini-spin" /> Starting engine…</div>}
@@ -114,6 +135,11 @@ export default function App() {
       <FilterPopover />
       <Dialogs />
       <CommandPalette />
+      {scriptsEverOpened && (
+        <Suspense fallback={null}>
+          <ScriptEditor />
+        </Suspense>
+      )}
       <Toasts />
       {menu && <FloatingMenu items={menu.items} x={menu.x} y={menu.y} onClose={() => useApp.setState({ menu: null })} />}
       {dropping && (

@@ -38,6 +38,12 @@ def build_workbook(files: list[str]) -> Workbook:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["--run-python"]:
+        # bundled interpreter for "file" scripts when no system Python is installed
+        from .scripting import run_python_file
+
+        return run_python_file(argv[1:])
     ap = argparse.ArgumentParser(
         prog="pysheets", description="PySheets: a fast desktop spreadsheet on DuckDB"
     )

@@ -8,8 +8,10 @@ import traceback
 from collections.abc import Callable
 from typing import Any
 
+from .connectors.google import GoogleClient, GoogleError
 from .engine import features as F
 from .engine import io as IO
+from .engine import links as L
 from .engine.workbook import EngineError, Workbook
 from .formula.compiler import ALL_FUNCTIONS, FormulaError
 from .formula.parser import FormulaSyntaxError
@@ -17,12 +19,15 @@ from .formula.parser import FormulaSyntaxError
 log = logging.getLogger("pysheets")
 
 Handler = Callable[[Workbook, dict], Any]
-METHODS: dict[str, tuple[Handler, bool]] = {}
+METHODS: dict[str, tuple[Handler, bool, bool]] = {}
 
 
-def rpc(name: str, mutates: bool = True):
+def rpc(name: str, mutates: bool = True, lock: bool = True):
+    """Register an RPC method.  ``lock=False`` handlers take the workbook lock themselves
+    (used for long network work such as Google Sheets downloads and Python scripts)."""
+
     def deco(fn: Handler) -> Handler:
-        METHODS[name] = (fn, mutates)
+        METHODS[name] = (fn, mutates, lock)
         return fn
 
     return deco
@@ -32,34 +37,50 @@ def dispatch(wb: Workbook, method: str, params: dict, ctx: dict | None = None) -
     entry = METHODS.get(method)
     if entry is None:
         return {"ok": False, "error": f"Unknown method {method}"}
-    fn, mutates = entry
+    fn, mutates, locked = entry
+    if ctx is not None:
+        params = dict(params, __ctx=ctx)
+    if locked:
+        with wb.lock:
+            return _run(wb, fn, params, mutates)
+    return _run(wb, fn, params, mutates, locked=False)
+
+
+def _info(wb: Workbook) -> dict:
     with wb.lock:
+        return wb.info()
+
+
+def _run(wb: Workbook, fn: Handler, params: dict, mutates: bool, locked: bool = True) -> dict:
+    if locked:
         wb._pending = None
-        try:
-            if ctx is not None:
-                params = dict(params, __ctx=ctx)
-            result = fn(wb, params)
+    try:
+        result = fn(wb, params)
+        if locked:
             wb._pending = None
-            out = {"ok": True, "result": result}
-            if mutates:
-                out["info"] = wb.info()
-            return out
-        except (EngineError, FormulaError, FormulaSyntaxError, ValueError, KeyError, IndexError) as e:
+        out = {"ok": True, "result": result}
+        if mutates:
+            out["info"] = _info(wb)
+        return out
+    except (
+        EngineError,
+        FormulaError,
+        FormulaSyntaxError,
+        ValueError,
+        KeyError,
+        IndexError,
+        GoogleError,
+    ) as e:
+        if locked:
             _rollback(wb)
-            msg = e.args[0] if isinstance(e, KeyError) and e.args else str(e)
-            return {
-                "ok": False,
-                "error": str(msg).split("\n")[0][:500],
-                "info": wb.info() if mutates else None,
-            }
-        except Exception as e:  # pragma: no cover - unexpected engine failures
-            log.error("RPC %s failed: %s\n%s", method, e, traceback.format_exc())
+        msg = e.args[0] if isinstance(e, KeyError) and e.args else str(e)
+        return {"ok": False, "error": str(msg).split("\n")[0][:500], "info": _info(wb) if mutates else None}
+    except Exception as e:  # pragma: no cover - unexpected engine failures
+        log.error("RPC failed: %s\n%s", e, traceback.format_exc())
+        if locked:
             _rollback(wb)
-            return {
-                "ok": False,
-                "error": f"{type(e).__name__}: {str(e).splitlines()[0][:400] if str(e) else ''}",
-                "info": wb.info() if mutates else None,
-            }
+        first = str(e).splitlines()[0][:400] if str(e) else ""
+        return {"ok": False, "error": f"{type(e).__name__}: {first}", "info": _info(wb) if mutates else None}
 
 
 def _rollback(wb: Workbook):
@@ -75,7 +96,7 @@ def _rollback(wb: Workbook):
 
 
 @rpc("workbook.info", mutates=False)
-def _info(wb, p):
+def _workbook_info(wb, p):
     return wb.info()
 
 
@@ -274,6 +295,23 @@ def _style(wb, p):
     return F.set_style(wb, p["sheet"], p["rects"], p["patch"])
 
 
+@rpc("style.borders")
+def _borders(wb, p):
+    return F.set_borders(
+        wb, p["sheet"], p["rects"], p["mode"], p.get("line", "thin"), p.get("color", "#1f2937")
+    )
+
+
+@rpc("cells.merge")
+def _merge(wb, p):
+    return F.merge_cells(wb, p["sheet"], p["rects"], p.get("mode", "all"), bool(p.get("dry_run")))
+
+
+@rpc("cells.merge_check", mutates=False)
+def _merge_check(wb, p):
+    return F.merge_cells(wb, p["sheet"], p["rects"], p.get("mode", "all"), dry_run=True)
+
+
 @rpc("cf.add")
 def _cf_add(wb, p):
     return F.add_cond_format(wb, p["sheet"], p["rule"])
@@ -412,7 +450,7 @@ def _io_temp(wb, p):
 # ----------------------------------------------------------------- dialogs
 
 
-@rpc("dialog.open", mutates=False)
+@rpc("dialog.open", mutates=False, lock=False)
 def _dialog_open(wb, p):
     ctx = p.get("__ctx") or {}
     win = ctx.get("window")
@@ -438,7 +476,20 @@ def _dialog_open(wb, p):
     return {"paths": list(res) if res else []}
 
 
-@rpc("dialog.save", mutates=False)
+@rpc("dialog.folder", mutates=False, lock=False)
+def _dialog_folder(wb, p):
+    ctx = p.get("__ctx") or {}
+    win = ctx.get("window")
+    if win is None:
+        return {"unsupported": True}
+    import webview
+
+    kind = webview.FileDialog.FOLDER if hasattr(webview, "FileDialog") else webview.FOLDER_DIALOG
+    res = win.create_file_dialog(kind)
+    return {"paths": list(res) if res else []}
+
+
+@rpc("dialog.save", mutates=False, lock=False)
 def _dialog_save(wb, p):
     ctx = p.get("__ctx") or {}
     win = ctx.get("window")
@@ -455,3 +506,104 @@ def _dialog_save(wb, p):
     if not res:
         return {"path": None}
     return {"path": res if isinstance(res, str) else res[0]}
+
+
+# ------------------------------------------------------------ google sheets
+
+
+@rpc("google.status", mutates=False, lock=False)
+def _g_status(wb, p):
+    return GoogleClient.status()
+
+
+@rpc("google.setup", mutates=False, lock=False)
+def _g_setup(wb, p):
+    return GoogleClient.setup(
+        p.get("folder"), p.get("client_secret"), p.get("token"), p.get("service_account")
+    )
+
+
+@rpc("google.connect", mutates=False, lock=False)
+def _g_connect(wb, p):
+    client = GoogleClient.connect(interactive=True)
+    if client.public:
+        raise GoogleError("Sign-in did not complete")
+    return GoogleClient.status()
+
+
+@rpc("google.sign_out", mutates=False, lock=False)
+def _g_sign_out(wb, p):
+    return GoogleClient.sign_out()
+
+
+@rpc("gsheets.tabs", mutates=False, lock=False)
+def _g_tabs(wb, p):
+    from .connectors.google import extract_sheet_id
+
+    return GoogleClient.connect().spreadsheet_info(extract_sheet_id(p["url"]))
+
+
+@rpc("gsheets.import", lock=False)
+def _g_import(wb, p):
+    return L.import_tabs(wb, p["url"], p.get("tabs") or [], typed=p.get("typed", True))
+
+
+@rpc("gsheets.consolidate", lock=False)
+def _g_consolidate(wb, p):
+    return L.consolidate_gsheets(wb, p["spec"])
+
+
+@rpc("links.refresh", lock=False)
+def _links_refresh(wb, p):
+    return L.refresh(wb, p["sheet"])
+
+
+@rpc("links.refresh_all", lock=False)
+def _links_refresh_all(wb, p):
+    return L.refresh_all(wb)
+
+
+# ------------------------------------------------------------------ scripts
+
+
+@rpc("scripts.list", mutates=False, lock=False)
+def _scripts_list(wb, p):
+    return wb.scripting.describe()
+
+
+@rpc("scripts.templates", mutates=False, lock=False)
+def _scripts_templates(wb, p):
+    from .script_templates import TEMPLATES
+
+    return TEMPLATES
+
+
+@rpc("scripts.save", lock=False)
+def _scripts_save(wb, p):
+    return wb.scripting.save(p["script"])
+
+
+@rpc("scripts.delete", lock=False)
+def _scripts_delete(wb, p):
+    wb.scripting.delete(p["id"])
+
+
+@rpc("scripts.trust", lock=False)
+def _scripts_trust(wb, p):
+    return wb.scripting.load_all_functions()
+
+
+@rpc("scripts.run", mutates=False, lock=False)
+def _scripts_run(wb, p):
+    run = wb.scripting.start(p.get("id"), p.get("code"), p.get("name") or "Script")
+    return run.to_dict()
+
+
+@rpc("scripts.status", mutates=False, lock=False)
+def _scripts_status(wb, p):
+    return wb.scripting.status(p["run"], int(p.get("since") or 0))
+
+
+@rpc("scripts.cancel", mutates=False, lock=False)
+def _scripts_cancel(wb, p):
+    return wb.scripting.cancel(p["run"])

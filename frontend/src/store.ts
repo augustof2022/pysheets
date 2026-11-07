@@ -3,7 +3,23 @@ import { rpc, RpcError } from "./api";
 import type { CellInfo, Rect, Selection, SheetInfo, Stats, WorkbookInfo } from "./types";
 
 export type PanelKind = "pivot" | "cf" | "dv" | "dups" | "profile" | "clean";
-export type DialogKind = "import" | "export" | "sql" | "shortcuts" | "about" | "split";
+export type DialogKind = "import" | "export" | "sql" | "shortcuts" | "about" | "split" | "google";
+
+export interface ScriptLine {
+  t: number;
+  s: "out" | "err" | "sys";
+  text: string;
+}
+
+export interface RunState {
+  id: string;
+  scriptId: string | null;
+  name: string;
+  status: "running" | "done" | "error" | "cancelled";
+  lines: ScriptLine[];
+  error: string | null;
+  elapsed: number;
+}
 
 export interface Toast {
   id: number;
@@ -81,7 +97,10 @@ export interface AppState {
   menu: ContextMenu | null;
   filterPopover: { col: number; x: number; y: number } | null;
   palette: boolean;
+  scriptsOpen: boolean;
+  run: RunState | null;
   functions: string[];
+  builtinFunctions: string[];
   dataVersion: number;
   perSheet: Record<string, PerSheet>;
 }
@@ -109,7 +128,10 @@ export const useApp = create<AppState>(() => ({
   menu: null,
   filterPopover: null,
   palette: false,
+  scriptsOpen: false,
+  run: null,
   functions: [],
+  builtinFunctions: [],
   dataVersion: 0,
   perSheet: {},
 }));
@@ -155,7 +177,8 @@ export function applyInfo(info: WorkbookInfo | undefined | null) {
   let sheetId = st.sheetId;
   if (!sheetId || !info.sheets.some((s) => s.id === sheetId)) sheetId = info.sheets[0]?.id || null;
   const changed = !st.info || st.info.version !== info.version;
-  set({ info, sheetId, dataVersion: changed ? st.dataVersion + 1 : st.dataVersion });
+  const fns = [...new Set([...st.builtinFunctions, ...(info.custom_functions || [])])].sort();
+  set({ info, sheetId, dataVersion: changed ? st.dataVersion + 1 : st.dataVersion, functions: st.builtinFunctions.length ? fns : st.functions });
   document.title = `${info.dirty ? "• " : ""}${info.title} — PySheets`;
 }
 

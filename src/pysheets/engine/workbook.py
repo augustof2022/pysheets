@@ -104,8 +104,23 @@ class Workbook:
         self._cache: dict = {}
         self._in_pivot_refresh = False
         self._pending: dict | None = None
+        self.scripts: list[dict] = []  # Python scripts saved with the workbook
+        self.custom_functions: dict[str, dict] = {}  # @ps.function definitions (DuckDB UDFs)
+        self._scripting = None
+
+    @property
+    def scripting(self):
+        if self._scripting is None:
+            from ..scripting import ScriptManager
+
+            self._scripting = ScriptManager(self)
+        return self._scripting
 
     # ------------------------------------------------------------------ duckdb
+
+    def flush(self):
+        """Close any partially-fetched result (DuckDB 2 requires this before register/UDF changes)."""
+        self.con.execute("SELECT 1").fetchall()
 
     def register(self, name: str, obj):
         """Register an Arrow table as a view (DuckDB 2 needs pending results closed first)."""
@@ -143,6 +158,11 @@ class Workbook:
             "can_redo": bool(self.redo_stack),
             "undo_label": self.undo_stack[-1]["label"] if self.undo_stack else None,
             "redo_label": self.redo_stack[-1]["label"] if self.redo_stack else None,
+            "scripts": [
+                {"id": x["id"], "name": x.get("name"), "kind": x.get("kind", "macro")} for x in self.scripts
+            ],
+            "scripts_trusted": self._scripting.trusted if self._scripting is not None else True,
+            "custom_functions": sorted(self.custom_functions),
             "sheets": [self.sheet_info(s) for s in self.sheets],
         }
 
@@ -1668,6 +1688,8 @@ class Workbook:
         sh = self.sheet(sheet_id)
         if not keys or sh.nrows == 0:
             return {"ok": True}
+        if any(m["r2"] > m["r1"] and m["r2"] >= 1 for m in sh.merges):
+            raise EngineError("Unmerge vertically merged cells before sorting")
         self._begin("Sort", [(sh.id, "table")])
         order = []
         for k in keys:
@@ -1997,6 +2019,13 @@ class Workbook:
             raise EngineError(msg)
 
     def close(self):
+        for meta in list(self.custom_functions.values()):
+            try:
+                self.flush()
+                self.con.remove_function(meta["sql"])
+            except duckdb.Error:
+                pass
+        self.custom_functions = {}
         try:
             self.con.close()
         except duckdb.Error:

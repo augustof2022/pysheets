@@ -351,17 +351,8 @@ def _merge_kind(a: str, b: str) -> str:
     return "str"
 
 
-def _rows_to_sheet(
-    wb: Workbook,
-    name: str,
-    names: list[str],
-    rows: Iterator[list],
-    prog: Progress | None,
-    source: str | None = None,
-    header: bool = True,
-    chunk: int = 50_000,
-) -> Sheet:
-    """Stream python rows into a new sheet (used by Excel and SQL imports)."""
+def rows_to_arrow(names: list[str], rows: Iterable[list], prog: Progress | None = None, chunk: int = 50_000):
+    """Convert python rows to an Arrow table with one inferred type per column (columns ``__c0..``)."""
     import pyarrow as pa
 
     tables = []
@@ -424,6 +415,21 @@ def _rows_to_sheet(
             arrays.append(arr)
         batches.append(pa.table(arrays, names=colnames))
     tbl = pa.concat_tables(batches) if batches else pa.table({c: pa.array([], pa.string()) for c in colnames})
+    return tbl, names
+
+
+def _rows_to_sheet(
+    wb: Workbook,
+    name: str,
+    names: list[str],
+    rows: Iterator[list],
+    prog: Progress | None,
+    source: str | None = None,
+    header: bool = True,
+    chunk: int = 50_000,
+) -> Sheet:
+    """Stream python rows into a new sheet (used by Excel and SQL imports)."""
+    tbl, names = rows_to_arrow(list(names), rows, prog, chunk)
     reg = f"__arrow_{int(time.time() * 1000)}"
     wb.register(reg, tbl)
     try:
@@ -987,6 +993,7 @@ def save_workbook(wb: Workbook, path: str) -> dict:
             "title": wb.title,
             "sheets": [_clean_meta(s.to_meta()) for s in wb.sheets],
             "formulas": [f.to_dict() for f in wb.formulas.values()],
+            "scripts": wb.scripts,
         }
         wb.con.execute(f"CREATE TABLE {alias}.__pysheets_meta (k VARCHAR, v VARCHAR)")
         wb.con.execute(
@@ -1044,6 +1051,12 @@ def open_workbook(wb: Workbook, path: str) -> dict:
     wb.redo_stack.clear()
     wb.title = meta.get("title") or _base_name(path)
     wb.path = path
+    # scripts from a file stay disabled until the user enables them (they run code)
+    mgr = wb.scripting
+    for name in list(mgr.functions):
+        mgr.unregister_script_functions(mgr.functions[name].get("script_id"))
+    wb.scripts = list(meta.get("scripts") or [])
+    mgr.trusted = not any(s.get("code") or s.get("path") for s in wb.scripts)
     for sh in wb.sheets:
         wb._apply_filters(sh)
     for f in wb.formulas.values():
@@ -1063,6 +1076,11 @@ def new_workbook(wb: Workbook) -> dict:
     wb.redo_stack.clear()
     wb.sheets = []
     wb.formulas = {}
+    mgr = wb.scripting
+    for meta in list(mgr.functions.values()):
+        mgr.unregister_script_functions(meta.get("script_id"))
+    wb.scripts = []
+    mgr.trusted = True
     wb.add_sheet("Sheet1", record=False)
     wb.undo_stack.clear()
     wb.title = "Untitled spreadsheet"
