@@ -15,6 +15,10 @@ if not os.path.exists(os.path.join(WEB, "index.html")):
     raise SystemExit("Build the UI first: npm --prefix frontend ci && npm --prefix frontend run build")
 
 datas = [(WEB, "pysheets/web")]
+# optional OAuth client for "Sign in with Google" (written by CI from a repository secret)
+_CLIENT = os.path.join(ROOT, "src", "pysheets", "connectors", "google_client.json")
+if os.path.exists(_CLIENT):
+    datas.append((_CLIENT, "pysheets/connectors"))
 binaries = []
 hiddenimports = collect_submodules("pysheets")
 # app runtime + libraries that in-app Python scripts commonly import (Google auth, gspread, pandas, ...)

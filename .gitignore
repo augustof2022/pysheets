@@ -15,3 +15,6 @@ frontend/dist/
 src/pysheets/web/
 *.pysheets
 *.tsbuildinfo
+
+# OAuth client bundled into release builds (from a CI secret)
+src/pysheets/connectors/google_client.json

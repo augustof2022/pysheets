@@ -708,11 +708,10 @@ class ScriptManager:
     # -- running -------------------------------------------------------------------------
 
     def google(self):
+        """Client for the signed-in Google account (re-checked each call, so sign-out takes effect)."""
         from .connectors.google import GoogleClient
 
-        if self._google is None:
-            self._google = GoogleClient.connect(interactive=False)
-        return self._google
+        return GoogleClient.connect()
 
     def start(self, script_id: str | None = None, code: str | None = None, name: str = "Script") -> ScriptRun:
         if not self.trusted:

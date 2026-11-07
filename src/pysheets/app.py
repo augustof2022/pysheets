@@ -116,6 +116,19 @@ def main(argv: list[str] | None = None) -> int:
     # The server flips window.confirm_close whenever the workbook becomes dirty/clean,
     # so pywebview's own close prompt only appears when there is something to lose.
     server.window = window
+
+    def _focus_after_google_sign_in():
+        # the user finished signing in in their browser: bring PySheets back to the front
+        try:
+            window.restore()
+            window.on_top = True
+            window.on_top = False
+        except Exception:  # noqa: BLE001 - cosmetic
+            pass
+
+    from .connectors.google import SIGN_IN
+
+    SIGN_IN.on_done = _focus_after_google_sign_in
     webview.start(debug=args.debug, private_mode=False)
     server.shutdown()
     wb.close()

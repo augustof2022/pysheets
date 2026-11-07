@@ -294,7 +294,7 @@ export const TOP_MENUS: TopMenu[] = [
           items: [
             { label: "Consolidate many sheets…", run: () => openDialog("google", { tab: "consolidate" }) },
             { label: "Import one sheet…", run: () => openDialog("google", { tab: "import" }) },
-            { label: "Google account…", run: () => openDialog("google", { tab: "account" }) },
+            { label: "Google account…", run: () => openDialog("google") },
           ],
         },
         { label: "Refresh this sheet", icon: "redo", disabled: !sh?.link, run: () => A.refreshLinked() },

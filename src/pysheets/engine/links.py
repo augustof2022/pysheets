@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any
 
 from ..connectors.google import (
+    GoogleAuthRequired,
     GoogleClient,
     GoogleError,
     clean_header,
@@ -37,7 +38,7 @@ LOG_COLUMNS = [
 
 
 def _client(client: GoogleClient | None) -> GoogleClient:
-    return client if client is not None else GoogleClient.connect(interactive=False)
+    return client if client is not None else GoogleClient.connect()
 
 
 # ------------------------------------------------------------------ writing data
@@ -383,6 +384,8 @@ def refresh_all(wb: Workbook, client: GoogleClient | None = None) -> dict:
         try:
             refresh(wb, sid, cl)
             done.append(sid)
+        except GoogleAuthRequired:
+            raise
         except (EngineError, GoogleError) as e:
             errors.append(f"{sid}: {e}")
     return {"refreshed": len(done), "errors": errors}

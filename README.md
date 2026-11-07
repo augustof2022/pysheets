@@ -34,6 +34,9 @@ Every push builds the Windows app in GitHub Actions (**Actions → Windows app �
 * `PySheets-Setup-<version>.exe`: installer with a Start-menu entry and `.pysheets` file association.
 * `PySheets-<version>-windows-x64.zip`: portable folder; run `PySheets.exe`.
 
+To make **Sign in with Google** work without a `credentials.json` step, add a repository secret
+`GOOGLE_OAUTH_CLIENT_JSON` containing a Desktop-app OAuth client JSON. The Windows build bundles it.
+
 To publish a GitHub Release, run **Actions → Windows app → Run workflow** and enter a version
 such as `v0.3.1` in *release*; the workflow creates the tag and attaches both files. Pushing a
 `v*` tag does the same.
@@ -63,13 +66,22 @@ npm --prefix frontend run typecheck
 
 ## Google Sheets: linked data and consolidation
 
-**Data → Google Sheets** opens a dialog with three tabs.
+**Data → Google Sheets** asks you to **sign in first**. Importing, consolidating, refreshing
+and `ps.gsheet` in scripts all stay locked until you are signed in. The account e-mail then
+appears in the dialog, with a sign-out button.
 
-* **Account.** Pick the folder that already holds your `credentials.json` / `token.json`
-  (for example the folder of your existing consolidator scripts). The files are *copied* into
-  `%LOCALAPPDATA%\PySheets\google`, the originals are not touched, and the saved token is reused.
-  A service-account key also works. Without an account, sheets shared as "anyone with the link"
-  are read through the public CSV export. Access is read-only (`spreadsheets.readonly`).
+* **Sign in with Google.** Your browser opens Google's sign-in page. Pick the account and
+  allow read-only access (`spreadsheets.readonly` plus your e-mail address for display).
+  PySheets continues automatically, and the login is saved in `%LOCALAPPDATA%\PySheets\google`,
+  so you only do this once. The first time, PySheets asks for an OAuth client file
+  (`credentials.json`, a Google Cloud OAuth client of type *Desktop app*). You can choose the same
+  file your Python scripts use. Release builds can ship with a client built in (see below),
+  which skips that step.
+* **Other ways to sign in.** Reuse the `token.json` saved by your existing scripts (pick their
+  folder; the files are copied and the originals are untouched), or use a service-account key.
+* **Expired or revoked logins.** If the login expires or is revoked, the sign-in screen
+  comes back. A **Refresh** that was waiting for it runs again automatically once you are signed in.
+
 * **Import one sheet.** Paste a link, tick tabs, and each tab becomes a linked sheet (cloud
   icon on the tab). **Refresh** (toolbar, or **Data → Refresh all linked sheets**) replaces the
   linked columns with the latest values. Columns you add yourself, such as checks or formulas,
@@ -157,7 +169,8 @@ you review the code and click **Enable scripts**.
 * **Excel export writes values**, not formulas.
 * **QUERY** supports `select, where, group by, pivot, order by, limit, offset, label`.
 * **Sorting** a range that crosses vertically merged cells is refused (unmerge first).
-* **Google Sheets links are read-only.** PySheets pulls data and does not write back.
+* **Google Sheets links are read-only.** PySheets pulls data and does not write back. A Google
+  account is required. Sheets shared as "anyone with the link" are also read through that account.
 * **Not yet supported:** charts, per-row heights, hidden rows/columns (use filters),
   comments, named ranges, `INDIRECT`/`OFFSET`/`LAMBDA`, iterative calculation,
   real-time collaboration.

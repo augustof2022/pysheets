@@ -193,8 +193,10 @@ interface CallOpts {
   success?: string;
 }
 
-/** Run a mutating RPC: shows progress, applies the new workbook info, surfaces errors. */
+/** Run a mutating RPC: shows progress, applies the new workbook info, surfaces errors.
+ *  Google calls made while signed out open the Google sign-in first and continue once signed in. */
 export async function call<T = unknown>(method: string, params: Record<string, unknown> = {}, opts: CallOpts = {}): Promise<T | undefined> {
+  let needsGoogle: string | null = null;
   set((s) => ({ busy: s.busy + 1, busyLabel: opts.label ?? s.busyLabel }));
   try {
     const { result, info } = await rpc<T>(method, params);
@@ -204,14 +206,22 @@ export async function call<T = unknown>(method: string, params: Record<string, u
   } catch (e) {
     if (e instanceof RpcError) {
       applyInfo(e.info);
-      if (!opts.quiet) toast(e.message, "error");
+      if (e.code === "google_auth") needsGoogle = e.message;
+      else if (!opts.quiet) toast(e.message, "error");
     } else {
       toast(String(e), "error");
     }
-    return undefined;
+    if (!needsGoogle) return undefined;
   } finally {
     set((s) => ({ busy: Math.max(0, s.busy - 1), busyLabel: s.busy <= 1 ? null : s.busyLabel }));
   }
+  return new Promise<T | undefined>((resolve) =>
+    openDialog("google", {
+      reason: needsGoogle,
+      retry: () => call<T>(method, params, opts).then(resolve),
+      cancel: () => resolve(undefined),
+    }),
+  );
 }
 
 /** Read-only RPC with error toast. */

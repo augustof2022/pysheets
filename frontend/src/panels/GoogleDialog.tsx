@@ -1,16 +1,19 @@
-import { CheckCircle2, Cloud, KeyRound, Link2, LogIn, RefreshCw, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Cloud, FileKey2, FileSpreadsheet, FolderKey, KeyRound, LogOut, RefreshCw, ShieldCheck, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { invalidate } from "../actions";
-import { DESKTOP, rpc } from "../api";
+import { DESKTOP, rpc, RpcError } from "../api";
 import { call, closeDialog, currentSheet, query, selectSheet, toast, useApp } from "../store";
 
 interface GStatus {
   folder: string;
-  client_secret: boolean;
-  token: boolean;
-  service_account: boolean;
-  mode: "public" | "oauth" | "service_account";
-  account?: string;
+  signed_in: boolean;
+  email: string | null;
+  method: "oauth" | "token" | "service_account" | null;
+  has_client: boolean;
+  client_source: "file" | "bundled" | null;
+  expired?: string;
+  warning?: string;
+  sign_in: { pending: boolean; auth_url: string | null; error: string | null; email: string | null };
 }
 
 interface Tab {
@@ -19,78 +22,181 @@ interface Tab {
   cols: number;
 }
 
-function Account({ status, onChange }: { status: GStatus | null; onChange: (s: GStatus) => void }) {
-  const [busy, setBusy] = useState<string | null>(null);
+function GoogleG({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
+      <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+      <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+      <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+      <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+    </svg>
+  );
+}
+
+async function pickPath(kind: "folder" | "file", typed: string): Promise<string | null> {
+  if (!DESKTOP) return typed.trim() || null;
+  const res = await query<{ paths?: string[]; path?: string }>(kind === "folder" ? "dialog.folder" : "dialog.open", kind === "file" ? { types: ["JSON (*.json)"] } : {});
+  return res?.paths?.[0] || res?.path || null;
+}
+
+/** Shown until the user is signed in: nothing Google-related is available before that. */
+function SignInGate({ status, reason, onStatus }: { status: GStatus; reason?: string; onStatus: (s: GStatus) => void }) {
+  const [more, setMore] = useState(false);
   const [path, setPath] = useState("");
-  const pick = async (kind: "folder" | "file") => {
-    if (!DESKTOP) return path || null;
-    const res = await query<{ paths?: string[]; path?: string }>(kind === "folder" ? "dialog.folder" : "dialog.open", kind === "file" ? { types: ["JSON (*.json)"] } : {});
-    return res?.paths?.[0] || res?.path || null;
-  };
-  const setup = async (field: "folder" | "client_secret" | "service_account") => {
-    const p = await pick(field === "folder" ? "folder" : "file");
-    if (!p) return toast(DESKTOP ? "Nothing selected" : "Type the path first", "info");
-    const s = await query<GStatus>("google.setup", { [field]: p });
-    if (s) {
-      onChange(s);
-      toast("Credentials saved", "success");
-    }
-  };
-  const signIn = async () => {
-    setBusy("Complete the sign-in in your browser…");
+  const [working, setWorking] = useState(false);
+  const pending = status.sign_in.pending;
+  const error = status.sign_in.error;
+
+  // watch for the sign-in to finish: fast while the browser flow runs, slowly otherwise
+  // (and whenever the window regains focus, e.g. coming back from the browser)
+  useEffect(() => {
+    const check = async () => {
+      try {
+        onStatus((await rpc<GStatus>("google.status")).result);
+      } catch {
+        /* keep polling */
+      }
+    };
+    const t = window.setInterval(check, pending ? 700 : 2500);
+    window.addEventListener("focus", check);
+    return () => {
+      window.clearInterval(t);
+      window.removeEventListener("focus", check);
+    };
+  }, [pending, onStatus]);
+
+  const run = async (method: string, params: Record<string, unknown> = {}) => {
+    setWorking(true);
     try {
-      const { result } = await rpc<GStatus>("google.connect");
-      onChange(result);
-      toast("Connected to Google", "success");
+      const { result } = await rpc<GStatus>(method, params);
+      onStatus(result);
+      return result;
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), "error");
+      return null;
     } finally {
-      setBusy(null);
+      setWorking(false);
     }
   };
+  const signIn = () => run("google.sign_in");
+  const setup = async (field: "client_secret" | "folder" | "service_account") => {
+    const p = await pickPath(field === "folder" ? "folder" : "file", path);
+    if (!p) return toast(DESKTOP ? "Nothing selected" : "Type the path on this computer first", "info");
+    const s = await run("google.setup", { [field]: p });
+    // a new OAuth client goes straight on to the browser sign-in
+    if (s && field === "client_secret" && !s.signed_in) await run("google.sign_in");
+  };
+
   return (
-    <div className="g-account">
-      <div className={`g-status ${status?.mode === "public" ? "warn" : "ok"}`}>
-        {status?.mode === "public" ? <Cloud size={18} /> : <CheckCircle2 size={18} />}
-        <div>
-          <b>{status?.mode === "service_account" ? `Service account${status.account ? ` · ${status.account}` : ""}` : status?.mode === "oauth" ? "Signed in with your Google account" : "Not connected"}</b>
-          <span>{status?.mode === "public" ? "Only sheets shared as “anyone with the link” can be read." : "Read-only access to Google Sheets (spreadsheets.readonly)."}</span>
-        </div>
+    <div className="g-gate pop-in">
+      <div className="g-gate-icon">
+        <FileSpreadsheet size={28} />
       </div>
-      {!DESKTOP && <input className="g-path" placeholder="Path on this computer, e.g. C:\PythonScripts\ku_ir_consolidator" value={path} onChange={(e) => setPath(e.target.value)} />}
-      <div className="g-actions">
-        <button className="g-card" onClick={() => setup("folder")}>
-          <KeyRound size={18} />
-          <b>Use my existing script folder</b>
-          <span>Pick the folder with credentials.json + token.json (e.g. your consolidator). No new sign-in needed.</span>
-        </button>
-        <button className="g-card" onClick={() => setup("client_secret")}>
-          <Link2 size={18} />
-          <b>Choose an OAuth client file</b>
-          <span>credentials.json from Google Cloud (Desktop app), then sign in.</span>
-        </button>
-        <button className="g-card" onClick={signIn} disabled={!status?.client_secret || !!busy}>
-          <LogIn size={18} />
-          <b>Sign in with Google</b>
-          <span>{busy || (status?.client_secret ? "Opens your browser once; the token is saved." : "Add credentials.json first.")}</span>
-        </button>
-        <button className="g-card" onClick={() => setup("service_account")}>
-          <KeyRound size={18} />
-          <b>Use a service account key</b>
-          <span>Share each sheet with the service account e-mail.</span>
-        </button>
-      </div>
-      {status && status.mode !== "public" && (
-        <button className="link" onClick={async () => onChange((await query<GStatus>("google.sign_out"))!)}>
-          Sign out / forget credentials
-        </button>
+      <h3>Sign in to Google Sheets</h3>
+      <p>{reason && reason.toLowerCase().includes("expired") ? reason : "Connect your Google account to import, consolidate and refresh spreadsheets. PySheets only asks for read-only access."}</p>
+      {status.expired && <div className="g-error">{status.expired}</div>}
+
+      {!DESKTOP && (
+        <input className="g-path" placeholder="Path on this computer (for the options below), e.g. C:\PythonScripts\ku_ir_consolidator\credentials.json" value={path} onChange={(e) => setPath(e.target.value)} />
       )}
-      <small className="muted">Stored in {status?.folder}</small>
+
+      {pending ? (
+        <div className="g-wait fade-in">
+          <span className="mini-spin lg" />
+          <b>Finish signing in in your browser…</b>
+          <span>Choose your Google account and allow access. PySheets continues automatically once you're done.</span>
+          <div className="g-wait-actions">
+            <button className="link" onClick={() => run("google.sign_in_reopen")}>
+              Open the sign-in page again
+            </button>
+            <span className="muted">·</span>
+            <button className="link" onClick={() => run("google.sign_in_cancel")}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : status.has_client ? (
+        <button className="g-signin-btn" onClick={signIn} disabled={working}>
+          <GoogleG /> Sign in with Google
+        </button>
+      ) : (
+        <div className="g-setup">
+          <div className="g-step">
+            <span className="g-step-n">1</span>
+            <div>
+              <b>Choose your OAuth client file</b>
+              <span>The credentials.json from Google Cloud (Desktop app). You can reuse the one your Python scripts already use.</span>
+            </div>
+            <button className="btn primary" onClick={() => setup("client_secret")} disabled={working}>
+              <FileKey2 size={15} /> Choose…
+            </button>
+          </div>
+          <div className="g-step off">
+            <span className="g-step-n">2</span>
+            <div>
+              <b>Sign in with Google</b>
+              <span>Your browser opens. Pick your account and allow read-only access.</span>
+            </div>
+          </div>
+          <details className="g-help">
+            <summary>How do I get a credentials.json?</summary>
+            <ol>
+              <li>Open Google Cloud Console → APIs &amp; Services, and enable the Google Sheets API.</li>
+              <li>Credentials → Create credentials → OAuth client ID → Application type: Desktop app.</li>
+              <li>Download the JSON and choose it here. It stays on this computer.</li>
+            </ol>
+          </details>
+        </div>
+      )}
+      {error && !pending && <div className="g-error fade-in">{error}</div>}
+
+      <div className="g-more">
+        <button className="link" onClick={() => setMore(!more)}>
+          {more ? "Hide other ways to sign in" : "Other ways to sign in"}
+        </button>
+        {more && (
+          <div className="g-actions fade-in">
+            <button className="g-card" onClick={() => setup("folder")} disabled={working}>
+              <FolderKey size={18} />
+              <b>Use my existing script folder</b>
+              <span>Pick the folder with token.json (and credentials.json), e.g. your consolidator. Signs in with that saved login.</span>
+            </button>
+            <button className="g-card" onClick={() => setup("service_account")} disabled={working}>
+              <KeyRound size={18} />
+              <b>Use a service account key</b>
+              <span>A service-account JSON key. Share each sheet with its e-mail.</span>
+            </button>
+            {status.has_client && (
+              <button className="g-card" onClick={() => setup("client_secret")} disabled={working}>
+                <FileKey2 size={18} />
+                <b>Change OAuth client file</b>
+                <span>{status.client_source === "bundled" ? "Use your own credentials.json instead of the built-in one." : "Choose a different credentials.json."}</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+      <small className="muted g-foot-note">
+        <ShieldCheck size={13} /> Read-only access · your login stays on this computer ({status.folder})
+      </small>
     </div>
   );
 }
 
-function ImportTab() {
+function AccountChip({ status, onSignOut }: { status: GStatus; onSignOut: () => void }) {
+  const who = status.email || (status.method === "token" ? "Saved login from your scripts" : "Google account");
+  return (
+    <div className="g-chip fade-in" title={status.method === "service_account" ? "Service account" : "Signed in"}>
+      <span className="g-avatar">{(status.email || "G")[0].toUpperCase()}</span>
+      <span className="g-who">{who}</span>
+      <button className="icon-btn sm" data-tip="Sign out" onClick={onSignOut}>
+        <LogOut size={14} />
+      </button>
+    </div>
+  );
+}
+
+function ImportTab({ onAuthLost }: { onAuthLost: () => void }) {
   const [url, setUrl] = useState("");
   const [info, setInfo] = useState<{ title: string; tabs: Tab[] } | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
@@ -102,6 +208,7 @@ function ImportTab() {
       setInfo(result);
       setChosen(new Set(result.tabs.slice(0, 1).map((t) => t.title)));
     } catch (e) {
+      if (e instanceof RpcError && e.code === "google_auth") onAuthLost();
       toast(e instanceof Error ? e.message : String(e), "error");
     }
   };
@@ -301,48 +408,97 @@ function ConsolidateTab() {
 }
 
 export function GoogleDialog() {
-  const props = useApp((s) => s.dialogProps) as { tab?: "import" | "consolidate" | "account" };
-  const [tab, setTab] = useState(props.tab || "consolidate");
+  const props = useApp((s) => s.dialogProps) as { tab?: "import" | "consolidate" | "account"; reason?: string; retry?: () => void; cancel?: () => void };
+  const [tab, setTab] = useState<"import" | "consolidate">(props.tab === "import" ? "import" : "consolidate");
   const [status, setStatus] = useState<GStatus | null>(null);
+  const finished = useRef(false);
+  const pendingRef = useRef(false);
+  pendingRef.current = !!status?.sign_in.pending;
+  const wasSignedIn = useRef<boolean | null>(null);
+
   useEffect(() => {
-    rpc<GStatus>("google.status").then(({ result }) => {
-      setStatus(result);
-      if (result.mode === "public" && !props.tab) setTab("account");
-    });
+    rpc<GStatus>("google.status", { verify: true })
+      .then(({ result }) => setStatus(result))
+      .catch((e) => toast(e instanceof Error ? e.message : String(e), "error"));
+    return () => {
+      if (pendingRef.current) rpc("google.sign_in_cancel").catch(() => undefined);
+      if (!finished.current) props.cancel?.();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // the moment sign-in completes: continue what the user was doing
+  useEffect(() => {
+    if (!status) return;
+    const before = wasSignedIn.current;
+    wasSignedIn.current = status.signed_in;
+    if (status.signed_in && before !== true) {
+      if (before === false) toast(`Signed in${status.email ? ` as ${status.email}` : ""}`, "success");
+      if (props.retry) {
+        finished.current = true;
+        const retry = props.retry;
+        closeDialog();
+        retry();
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && closeDialog();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  const signOut = async () => {
+    const s = await query<GStatus>("google.sign_out");
+    if (s) {
+      setStatus(s);
+      toast("Signed out of Google");
+    }
+  };
+
   return (
     <div className="overlay fade-in" onMouseDown={closeDialog}>
       <div className="dialog wide scale-in" onMouseDown={(e) => e.stopPropagation()}>
         <div className="dialog-head">
           <div>
             <h2>Google Sheets</h2>
-            <p>Linked data you can refresh any time</p>
+            <p>{status?.signed_in ? "Linked data you can refresh any time" : "Sign in to continue"}</p>
           </div>
-          <button className="icon-btn" onClick={closeDialog}>
-            <X size={18} />
-          </button>
+          <div className="row-gap">
+            {status?.signed_in && <AccountChip status={status} onSignOut={signOut} />}
+            <button className="icon-btn" onClick={closeDialog}>
+              <X size={18} />
+            </button>
+          </div>
         </div>
         <div className="dialog-body">
-          <div className="seg full">
-            <button className={tab === "consolidate" ? "on" : ""} onClick={() => setTab("consolidate")}>
-              Consolidate many sheets
-            </button>
-            <button className={tab === "import" ? "on" : ""} onClick={() => setTab("import")}>
-              Import one sheet
-            </button>
-            <button className={tab === "account" ? "on" : ""} onClick={() => setTab("account")}>
-              Account {status && status.mode !== "public" ? "✓" : ""}
-            </button>
-          </div>
-          {tab === "account" && <Account status={status} onChange={setStatus} />}
-          {tab === "import" && <ImportTab />}
-          {tab === "consolidate" && <ConsolidateTab />}
+          {!status ? (
+            <div className="g-checking">
+              <span className="mini-spin" /> Checking your Google sign-in…
+            </div>
+          ) : !status.signed_in ? (
+            <SignInGate status={status} reason={props.reason} onStatus={setStatus} />
+          ) : props.retry ? (
+            <div className="g-checking">
+              <span className="mini-spin" /> Continuing…
+            </div>
+          ) : (
+            <div className="g-main fade-in">
+              {status.warning && <div className="g-error">{status.warning}</div>}
+              <div className="seg full">
+                <button className={tab === "consolidate" ? "on" : ""} onClick={() => setTab("consolidate")}>
+                  Consolidate many sheets
+                </button>
+                <button className={tab === "import" ? "on" : ""} onClick={() => setTab("import")}>
+                  Import one sheet
+                </button>
+              </div>
+              {tab === "import" && <ImportTab onAuthLost={() => rpc<GStatus>("google.status").then(({ result }) => setStatus(result))} />}
+              {tab === "consolidate" && <ConsolidateTab />}
+            </div>
+          )}
         </div>
       </div>
     </div>

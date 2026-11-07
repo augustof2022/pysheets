@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { rpc } from "../api";
 import { FloatingMenu, usePresence } from "../components/Menu";
 import { enableScripts, loadScripts, runScript, saveScript, stopScript, type CustomFunction, type Script } from "../scripts";
-import { toast, useApp, type MenuItem } from "../store";
+import { openDialog, toast, useApp, type MenuItem } from "../store";
 
 const KIND_LABEL: Record<Script["kind"], string> = { macro: "Macro", functions: "Custom functions", file: "Run a .py file" };
 
@@ -327,6 +327,11 @@ export default function ScriptEditor() {
                       </div>
                     ))}
                     {run?.error && run.status !== "running" && <div className="cl err">✖ {run.error}</div>}
+                    {run?.error && run.status !== "running" && /sign in/i.test(run.error) && /google/i.test(run.error) && (
+                      <button className="btn sm primary cl-action" onClick={() => openDialog("google", { retry: () => run.scriptId && runScript(run.scriptId) })}>
+                        Sign in to Google, then run again
+                      </button>
+                    )}
                   </div>
                 </div>
               </>

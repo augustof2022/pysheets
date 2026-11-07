@@ -74,7 +74,10 @@ def _run(wb: Workbook, fn: Handler, params: dict, mutates: bool, locked: bool = 
         if locked:
             _rollback(wb)
         msg = e.args[0] if isinstance(e, KeyError) and e.args else str(e)
-        return {"ok": False, "error": str(msg).split("\n")[0][:500], "info": _info(wb) if mutates else None}
+        out = {"ok": False, "error": str(msg).split("\n")[0][:500], "info": _info(wb) if mutates else None}
+        if getattr(e, "code", None):
+            out["code"] = e.code
+        return out
     except Exception as e:  # pragma: no cover - unexpected engine failures
         log.error("RPC failed: %s\n%s", e, traceback.format_exc())
         if locked:
@@ -513,7 +516,7 @@ def _dialog_save(wb, p):
 
 @rpc("google.status", mutates=False, lock=False)
 def _g_status(wb, p):
-    return GoogleClient.status()
+    return GoogleClient.status(verify=bool(p.get("verify")))
 
 
 @rpc("google.setup", mutates=False, lock=False)
@@ -523,11 +526,27 @@ def _g_setup(wb, p):
     )
 
 
-@rpc("google.connect", mutates=False, lock=False)
-def _g_connect(wb, p):
-    client = GoogleClient.connect(interactive=True)
-    if client.public:
-        raise GoogleError("Sign-in did not complete")
+@rpc("google.sign_in", mutates=False, lock=False)
+def _g_sign_in(wb, p):
+    from .connectors.google import SIGN_IN
+
+    SIGN_IN.start()
+    return GoogleClient.status()
+
+
+@rpc("google.sign_in_reopen", mutates=False, lock=False)
+def _g_sign_in_reopen(wb, p):
+    from .connectors.google import SIGN_IN
+
+    SIGN_IN.reopen()
+    return GoogleClient.status()
+
+
+@rpc("google.sign_in_cancel", mutates=False, lock=False)
+def _g_sign_in_cancel(wb, p):
+    from .connectors.google import SIGN_IN
+
+    SIGN_IN.cancel()
     return GoogleClient.status()
 
 

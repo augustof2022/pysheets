@@ -2647,10 +2647,229 @@ select:focus,
   padding: 0 10px;
   background: var(--surface);
 }
+/* sign-in gate */
+.g-checking {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 48px 0;
+  color: var(--text-muted);
+}
+.g-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.g-gate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  padding: 14px 6px 2px;
+}
+.g-gate h3 {
+  margin: 2px 0 0;
+  font-size: 19px;
+  letter-spacing: -0.01em;
+}
+.g-gate > p {
+  margin: 0;
+  max-width: 460px;
+  color: var(--text-muted);
+}
+.g-gate-icon {
+  width: 60px;
+  height: 60px;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  color: #0f9d58;
+  background: color-mix(in srgb, #0f9d58 13%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #0f9d58 22%, transparent);
+}
+.g-signin-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  height: 44px;
+  margin-top: 6px;
+  padding: 0 24px 0 16px;
+  border-radius: 22px;
+  border: 1px solid #dadce0;
+  background: #fff;
+  color: #1f1f1f;
+  font: 500 14px/1 "Segoe UI", Roboto, system-ui, sans-serif;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--dur-fast), background var(--dur-fast), transform var(--dur-fast) var(--ease-out);
+}
+.g-signin-btn:hover:not(:disabled) {
+  background: #f8faff;
+  box-shadow: 0 1px 3px rgba(60, 64, 67, 0.3), 0 4px 10px 2px rgba(60, 64, 67, 0.14);
+}
+.g-signin-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.g-signin-btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+:root[data-theme="dark"] .g-signin-btn {
+  background: #131314;
+  border-color: #8e918f;
+  color: #e3e3e3;
+}
+.g-wait {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 16px 22px;
+  width: min(460px, 100%);
+  border-radius: 14px;
+  background: var(--accent-soft);
+}
+.g-wait > span:not(.mini-spin) {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+.g-wait-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 12.5px;
+}
+.mini-spin.lg {
+  width: 22px;
+  height: 22px;
+  border-width: 2.5px;
+  margin-bottom: 4px;
+}
+.g-error {
+  width: min(520px, 100%);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+.g-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(560px, 100%);
+  margin-top: 4px;
+}
+.g-step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.g-step.off {
+  opacity: 0.55;
+}
+.g-step > div {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.g-step > div span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.g-step-n {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+}
+.g-help {
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+.g-help summary {
+  cursor: pointer;
+  color: var(--accent);
+  width: fit-content;
+}
+.g-help ol {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.g-more {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+.g-more .g-actions {
+  width: 100%;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+.g-foot-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+}
+.g-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 3px 3px 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12.5px;
+  max-width: 320px;
+}
+.g-who {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.g-avatar {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+}
 .tab-icon.linked {
   color: var(--accent-2);
   opacity: 1;
 }
 .refresh-btn {
   color: var(--accent);
+}
+.g-gate .g-path {
+  width: min(560px, 100%);
+}
+.cl-action {
+  margin: 8px 0 2px;
 }

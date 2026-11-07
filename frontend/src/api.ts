@@ -11,9 +11,11 @@ export const DESKTOP = !!cfg.desktop;
 
 export class RpcError extends Error {
   info?: WorkbookInfo | null;
-  constructor(msg: string, info?: WorkbookInfo | null) {
+  code?: string;
+  constructor(msg: string, info?: WorkbookInfo | null, code?: string) {
     super(msg);
     this.info = info;
+    this.code = code;
   }
 }
 
@@ -32,7 +34,7 @@ export async function rpc<T = unknown>(method: string, params: Record<string, un
   const res = await fetch("api/rpc", { method: "POST", headers: headers(), body: JSON.stringify({ method, params }) });
   if (res.status === 401) throw new RpcError("Not authorized — restart PySheets.");
   const body = await res.json();
-  if (!body.ok) throw new RpcError(body.error || "Something went wrong", body.info);
+  if (!body.ok) throw new RpcError(body.error || "Something went wrong", body.info, body.code);
   return { result: body.result as T, info: body.info };
 }
 
