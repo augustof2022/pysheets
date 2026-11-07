@@ -155,6 +155,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "error": "bad json"}, 400)
             ctx = {"window": self.server.window}
             res = api.dispatch(self.server.wb, req.get("method", ""), req.get("params") or {}, ctx)
+            if self.server.window is not None:
+                try:
+                    self.server.window.confirm_close = bool(self.server.wb.dirty)
+                except Exception:  # pragma: no cover - window already closed
+                    pass
             return self._json(_clean(res))
         if parsed.path == "/api/upload":
             name = os.path.basename((query.get("name") or ["upload.bin"])[0]) or "upload.bin"

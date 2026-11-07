@@ -105,18 +105,11 @@ def main(argv: list[str] | None = None) -> int:
         background_color="#FFFFFF",
         text_select=True,
         confirm_close=False,
+        localization={"global.quitConfirmation": "You have unsaved changes. Quit PySheets anyway?"},
     )
+    # The server flips window.confirm_close whenever the workbook becomes dirty/clean,
+    # so pywebview's own close prompt only appears when there is something to lose.
     server.window = window
-
-    def on_closing():
-        if wb.dirty and not os.environ.get("PYSHEETS_NO_CONFIRM"):
-            return window.create_confirmation_dialog("PySheets", "Quit without saving your changes?")
-        return True
-
-    try:
-        window.events.closing += on_closing
-    except Exception:  # pragma: no cover - older pywebview
-        pass
     webview.start(debug=args.debug, private_mode=False)
     server.shutdown()
     wb.close()
