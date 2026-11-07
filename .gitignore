@@ -10,3 +10,7 @@ dist/
 htmlcov/
 .env
 .DS_Store
+node_modules/
+frontend/dist/
+src/pysheets/web/
+*.pysheets

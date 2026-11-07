@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import argparse
-
-from pysheets import __version__
-
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="pysheets", description=__doc__)
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    parser.parse_args(argv)
-    parser.print_help()
-    return 0
+    from .app import main as app_main
+
+    return app_main(argv)
 
 
 if __name__ == "__main__":
