@@ -848,7 +848,9 @@ def run_python_file(argv: list[str]) -> int:
     for name, fd in (("stdout", 1), ("stderr", 2)):
         if getattr(sys, name) is None:
             try:
-                setattr(sys, name, open(fd, "w", encoding="utf-8", errors="replace", buffering=1, closefd=False))
+                setattr(
+                    sys, name, open(fd, "w", encoding="utf-8", errors="replace", buffering=1, closefd=False)
+                )
             except OSError:
                 setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
     sys.argv = list(argv)
