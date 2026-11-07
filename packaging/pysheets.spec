@@ -2,7 +2,10 @@
 #   pyinstaller packaging/pysheets.spec --noconfirm
 # Produces dist/PySheets/PySheets.exe (one-folder build: starts fast, no unpacking).
 # -*- mode: python ; coding: utf-8 -*-
+import importlib.util
 import os
+import pkgutil
+import sys
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
@@ -14,7 +17,10 @@ if not os.path.exists(os.path.join(WEB, "index.html")):
 datas = [(WEB, "pysheets/web")]
 binaries = []
 hiddenimports = collect_submodules("pysheets")
-for pkg in ("duckdb", "python_calamine", "rustpy_xlsxwriter", "webview", "xlsxwriter", "sqlalchemy"):
+# app runtime + libraries that in-app Python scripts commonly import (Google auth, gspread, pandas, ...)
+for pkg in ("duckdb", "python_calamine", "rustpy_xlsxwriter", "webview", "xlsxwriter", "sqlalchemy",
+            "google.auth", "google.oauth2", "google_auth_oauthlib", "requests_oauthlib", "oauthlib", "requests",
+            "gspread", "gspread_dataframe", "openpyxl", "tqdm"):
     try:
         d, b, h = collect_all(pkg)
     except Exception:  # optional packages
@@ -22,6 +28,30 @@ for pkg in ("duckdb", "python_calamine", "rustpy_xlsxwriter", "webview", "xlsxwr
     datas += d
     binaries += b
     hiddenimports += h
+# in-app Python scripts run on this interpreter: ship the whole standard library, not just what PySheets imports
+_SKIP_STDLIB = {"tkinter", "turtle", "turtledemo", "idlelib", "test", "lib2to3", "ensurepip", "venv", "pydoc_data",
+                "this", "antigravity", "distutils"}
+
+
+def _stdlib_modules():
+    out = []
+    for name in sorted(sys.stdlib_module_names):
+        if name in _SKIP_STDLIB or name.startswith("_"):
+            continue
+        try:
+            spec = importlib.util.find_spec(name)
+        except Exception:
+            continue
+        if spec is None:  # e.g. POSIX-only modules on Windows
+            continue
+        out.append(name)
+        for info in pkgutil.walk_packages(spec.submodule_search_locations or [], name + ".", onerror=lambda _n: None):
+            if not any(part in ("test", "tests", "idle_test") for part in info.name.split(".")):
+                out.append(info.name)
+    return out
+
+
+hiddenimports += _stdlib_modules()
 hiddenimports += ["pyarrow", "pyarrow.lib", "clr", "webview.platforms.edgechromium", "webview.platforms.winforms"]
 
 a = Analysis(

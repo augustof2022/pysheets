@@ -21,8 +21,11 @@ compile to vectorised SQL. The UI is a canvas-rendered grid in a native Windows 
 | **Formula UX** | Syntax highlighting, colour-matched reference outlines on the grid, click-to-insert references (including from other tabs), function autocomplete with signature help, auto-closing parentheses, error tooltips. |
 | **Data tools** | Filter (by values with counts, or by condition), sort, pivot tables with a live preview (they refresh when the source changes), find & replace (case, whole cell, regex, all tabs), duplicate detection (count / highlight / mark / remove), data validation (dropdowns, checkboxes, number/date/text rules, e-mail, URL, regex, unique, custom formula; warn or reject) with an invalid-cell report, text cleanup (trim, case, non-printing), split text to columns, column statistics. |
 | **Formatting** | Number formats (currency, percent, dates, scientific, custom), bold/italic/underline/strike, text and fill colours, alignment, conditional formatting (comparisons, text, blanks, duplicates/unique, top/bottom N, above/below average, colour scales, custom formula). |
+| **Borders & merges** | Border picker (all, outer, inner, horizontal, vertical, each side, none) with thin, medium, thick, dashed, dotted and double lines in any colour. Merge all / horizontally / vertically / unmerge; merged cells select, edit and move as one block. |
+| **Google Sheets** | Import a tab as a **linked sheet** and press **Refresh** to pull the latest data. **Consolidate** the same tab from a list of spreadsheets (a directory sheet, a tab in this workbook, or pasted IDs) into one table with source columns and a refresh log. Refreshing re-reads the list, so new IDs are picked up. |
+| **Python scripts** | An Apps Script-style editor (**Extensions → Python scripts**) with macros, custom formula functions and "run my existing `.py` file" scripts. Scripts are saved inside the workbook. Every tab is a SQL table for DuckDB and a pandas DataFrame. |
 | **Layout** | Freeze rows/columns, multiple tabs (rename, reorder by drag, duplicate, delete), column resize and autofit, row density, light/dark theme, command palette (**Ctrl+K**). |
-| **Files** | Native `.pysheets` workbook (a single DuckDB file that keeps data, formulas, formats and rules). |
+| **Files** | Native `.pysheets` workbook (a single DuckDB file that keeps data, formulas, formats, rules, links and scripts). |
 
 ## Install (Windows)
 
@@ -31,13 +34,15 @@ Every push builds the Windows app in GitHub Actions (**Actions → Windows app �
 * `PySheets-Setup-<version>.exe`: installer with a Start-menu entry and `.pysheets` file association.
 * `PySheets-<version>-windows-x64.zip`: portable folder; run `PySheets.exe`.
 
-Tagging a release (`git tag v0.2.0 && git push --tags`) publishes both to GitHub Releases.
+To publish a GitHub Release, run **Actions → Windows app → Run workflow** and enter a version
+such as `v0.3.0` in *release*; the workflow creates the tag and attaches both files. Pushing a
+`v*` tag does the same.
 The app needs the Microsoft Edge WebView2 runtime, which ships with Windows 10 and 11.
 
 ## Run from source
 
 ```bash
-uv sync --all-extras                # Python deps (duckdb, pyarrow, pywebview, sqlalchemy, …)
+uv sync --all-extras                # Python deps (duckdb, pyarrow, pywebview, google-auth, …)
 npm --prefix frontend ci            # UI deps
 npm --prefix frontend run build     # builds the UI into src/pysheets/web
 uv run pysheets data.csv            # native window
@@ -55,6 +60,65 @@ uv run pytest             # engine, formula, import/export and server tests
 uv run ruff check src tests
 npm --prefix frontend run typecheck
 ```
+
+## Google Sheets: linked data and consolidation
+
+**Data → Google Sheets** opens a dialog with three tabs.
+
+* **Account.** Pick the folder that already holds your `credentials.json` / `token.json`
+  (for example the folder of your existing consolidator scripts). The files are *copied* into
+  `%LOCALAPPDATA%\PySheets\google`, the originals are not touched, and the saved token is reused.
+  A service-account key also works. Without an account, sheets shared as "anyone with the link"
+  are read through the public CSV export. Access is read-only (`spreadsheets.readonly`).
+* **Import one sheet.** Paste a link, tick tabs, and each tab becomes a linked sheet (cloud
+  icon on the tab). **Refresh** (toolbar, or **Data → Refresh all linked sheets**) replaces the
+  linked columns with the latest values. Columns you add yourself, such as checks or formulas,
+  are kept and recalculated.
+* **Consolidate many sheets.** This is the "master directory" workflow:
+  1. Choose where the list of spreadsheets lives: a Google Sheet (for example the
+     `app_cluster_directory` tab of your master directory), a tab in this workbook, or pasted IDs/links.
+  2. Name the ID column (with an optional link column fallback and a label column, e.g. `cluster_id`) and the
+     tabs to pull from each spreadsheet (e.g. `monitoring`).
+  3. PySheets downloads them in parallel, matches headers ignoring case, spaces and line breaks,
+     stacks them into one sheet per tab, and adds `_source_label`, `_source_spreadsheet_id`
+     and `_source_row_number` columns. It also writes a log tab (status, rows, missing/extra columns,
+     errors) for every source.
+  4. **Refresh** re-reads the directory first, so spreadsheets added to the list are included
+     in the next pull.
+
+## Python scripts and custom functions
+
+**Extensions → Python scripts** (or the `>_` toolbar button) opens the script editor. Scripts
+are stored in the `.pysheets` file. **Ctrl+S** saves, **Ctrl+Enter** runs, and the console shows
+`print` output, tracebacks and timing. There are three kinds:
+
+| Kind | What it does |
+| --- | --- |
+| **Macro** | Python that runs inside PySheets with a `ps` object, `pd` (pandas) and `duckdb`. |
+| **Custom functions** | Functions decorated with `@ps.function` become formula functions (`=HHID_OK(C2)`), with autocomplete. Plain functions run per row. `@ps.function(vectorized=True)` receives whole columns as pandas Series and is fast on millions of rows. Type hints (`str float int bool date`) set the types. |
+| **Run a .py file** | Runs an existing script, for example your pipeline's `00_run_..._pipeline.py`, with arguments and a working folder, streaming its output to the console. By default it uses the Python on your `PATH`, so your installed packages are available. Otherwise it uses the Python bundled with PySheets (pandas, DuckDB, google-auth, gspread, gspread-dataframe, openpyxl, tqdm, requests). |
+
+```python
+ps.sheets()                          # tab names
+df = ps.sheet("Sales").df()          # tab -> pandas DataFrame (row 1 = column names)
+ps.sql('SELECT region, sum(total) FROM "Sales" GROUP BY 1')   # every tab is a SQL table
+ps.new_sheet("Report", df)           # DataFrame -> new/replaced tab
+sh = ps.sheet("Report")
+sh.set("F1", "=SUM(E:E)")            # cells, formulas
+sh.append(more_rows_df)              # append, matching columns by header
+ps.gsheet(url_or_id, "monitoring")   # read a Google Sheets tab with your saved credentials
+ps.refresh_all()                     # refresh every linked / consolidated tab
+ps.read("C:/data/file.parquet")      # read any file DuckDB can read
+ps.run_file("C:/scripts/check.py", "--flag")   # run another script
+ps.progress(i, n, "Pulling…"); ps.toast("Done")
+```
+
+Templates in the **New script** menu cover consolidating from a directory, data-quality
+checks in SQL, custom functions, and running an existing file.
+
+**Security.** Scripts run with full access to your computer, like any Python script. A
+workbook opened from elsewhere keeps its scripts **off** (custom functions show `#NAME?`) until
+you review the code and click **Enable scripts**.
 
 ## How it works
 
@@ -92,9 +156,11 @@ npm --prefix frontend run typecheck
   stored as text. Numeric formulas still read numeric-looking text.
 * **Excel export writes values**, not formulas.
 * **QUERY** supports `select, where, group by, pivot, order by, limit, offset, label`.
-* **Not yet supported:** charts, merged cells, borders, per-row heights, hidden
-  rows/columns (use filters), comments, named ranges, `INDIRECT`/`OFFSET`/`LAMBDA`,
-  iterative calculation, real-time collaboration.
+* **Sorting** a range that crosses vertically merged cells is refused (unmerge first).
+* **Google Sheets links are read-only.** PySheets pulls data and does not write back.
+* **Not yet supported:** charts, per-row heights, hidden rows/columns (use filters),
+  comments, named ranges, `INDIRECT`/`OFFSET`/`LAMBDA`, iterative calculation,
+  real-time collaboration.
 
 ## Keyboard shortcuts
 
@@ -103,7 +169,7 @@ npm --prefix frontend run typecheck
 `Ctrl+F`/`Ctrl+H` find/replace · `Ctrl+K` command palette · `Ctrl+Shift+L` filter ·
 `Ctrl+Arrow` jump to data edge · `Ctrl+Space`/`Shift+Space` select column/row ·
 `Ctrl+PgUp/PgDn` switch tab · `Ctrl+O` open · `Ctrl+S` save · `Ctrl+Shift+E` export ·
-`Ctrl+/` all shortcuts.
+`Ctrl+/` all shortcuts · in the script editor `Ctrl+Enter` run, `Ctrl+S` save.
 
 ## License
 
