@@ -51,6 +51,11 @@ jobs:
           Stop-Process -Id $p.Id -Force
           if (-not $ok) { throw "frozen app did not serve the UI" }
           Write-Host "Frozen app serves the UI"
+          # the bundled interpreter used by in-app scripts must have the libraries ported scripts import
+          $s = Start-Process -FilePath dist\PySheets\PySheets.exe -ArgumentList "--run-python","packaging\smoke_scripts.py" `
+            -Wait -PassThru -NoNewWindow -RedirectStandardOutput smoke.out -RedirectStandardError smoke.err
+          Get-Content smoke.out, smoke.err
+          if ($s.ExitCode -ne 0 -or -not (Select-String -Path smoke.out -Pattern "imports ok" -Quiet)) { throw "bundled script libraries are missing" }
 
       - name: Build installer
         shell: pwsh

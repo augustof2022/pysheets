@@ -844,6 +844,13 @@ def run_python_file(argv: list[str]) -> int:
     if not argv:
         print("usage: --run-python script.py [args...]")
         return 2
+    # a windowed (GUI) build may start without Python-level std streams even when the parent passed pipes
+    for name, fd in (("stdout", 1), ("stderr", 2)):
+        if getattr(sys, name) is None:
+            try:
+                setattr(sys, name, open(fd, "w", encoding="utf-8", errors="replace", buffering=1, closefd=False))
+            except OSError:
+                setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
     sys.argv = list(argv)
     sys.path.insert(0, os.path.dirname(os.path.abspath(argv[0])))
     try:
