@@ -1,4 +1,4 @@
-import { Command, Moon, Plus, Sun, X, ChevronDown, Sheet as SheetIcon, AlertTriangle, CheckCircle2, Info as InfoIcon, Loader2, FunctionSquare } from "lucide-react";
+import { Cloud, Command, Moon, Plus, Sun, X, ChevronDown, Sheet as SheetIcon, AlertTriangle, CheckCircle2, Info as InfoIcon, Loader2, FunctionSquare } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import * as A from "../actions";
 import { autoNumber } from "../format";
@@ -273,7 +273,7 @@ export function SheetTabs() {
               tabMenu(s.id, e.clientX, e.clientY - 250);
             }}
           >
-            {s.pivot ? <span className="tab-badge">⊞</span> : <SheetIcon size={13} className="tab-icon" />}
+            {s.pivot ? <span className="tab-badge">⊞</span> : s.link ? <Cloud size={13} className="tab-icon linked" /> : <SheetIcon size={13} className="tab-icon" />}
             {renaming === s.id ? (
               <input
                 className="tab-input"

@@ -1,5 +1,6 @@
 import * as A from "./actions";
 import { exportDialog, newWorkbook, openFile, saveWorkbook, saveWorkbookAs } from "./fileops";
+import { enableScripts, openScripts, runScript } from "./scripts";
 import { colLetters } from "./format";
 import type { Hit } from "./grid/GridController";
 import { MOD } from "./shortcuts";
@@ -240,6 +241,31 @@ export const TOP_MENUS: TopMenu[] = [
       { label: "Underline", icon: "underline", shortcut: `${MOD}+U`, run: () => A.toggleStyle("underline") },
       { label: "Strikethrough", icon: "strike", shortcut: "Alt+Shift+5", run: () => A.toggleStyle("strike") },
       { divider: true },
+      {
+        label: "Borders",
+        icon: "table",
+        items: [
+          { label: "All borders", run: () => A.applyBorders("all") },
+          { label: "Outer borders", run: () => A.applyBorders("outer") },
+          { label: "Inner borders", run: () => A.applyBorders("inner") },
+          { label: "Thick outer border", run: () => A.applyBorders("outer", "thick") },
+          { label: "Bottom border", run: () => A.applyBorders("bottom") },
+          { divider: true },
+          { label: "Clear borders", run: () => A.applyBorders("none") },
+        ],
+      },
+      {
+        label: "Merge cells",
+        icon: "columns",
+        items: [
+          { label: "Merge all", run: () => A.mergeCells("all") },
+          { label: "Merge horizontally", run: () => A.mergeCells("horizontal") },
+          { label: "Merge vertically", run: () => A.mergeCells("vertical") },
+          { divider: true },
+          { label: "Unmerge", run: () => A.mergeCells("unmerge") },
+        ],
+      },
+      { divider: true },
       { label: "Conditional formatting…", icon: "palette", run: () => openPanel("cf") },
       { label: "Clear formatting", icon: "eraser", run: () => A.clearSelection("formats") },
     ],
@@ -262,7 +288,34 @@ export const TOP_MENUS: TopMenu[] = [
         { label: "Split text to columns…", icon: "split", run: () => openDialog("split", { col: c }) },
         { label: "Column statistics", icon: "chart", run: () => openPanel("profile", { col: c }) },
         { divider: true },
+        {
+          label: "Google Sheets",
+          icon: "table",
+          items: [
+            { label: "Consolidate many sheets…", run: () => openDialog("google", { tab: "consolidate" }) },
+            { label: "Import one sheet…", run: () => openDialog("google", { tab: "import" }) },
+            { label: "Google account…", run: () => openDialog("google", { tab: "account" }) },
+          ],
+        },
+        { label: "Refresh this sheet", icon: "redo", disabled: !sh?.link, run: () => A.refreshLinked() },
+        { label: "Refresh all data", icon: "redo", run: () => A.refreshAll() },
         { label: "Import from database…", icon: "database", run: () => openDialog("sql") },
+      ];
+    },
+  },
+  {
+    label: "Extensions",
+    items: () => {
+      const info = useApp.getState().info;
+      const macros = (info?.scripts || []).filter((s) => s.kind !== "functions");
+      return [
+        { label: "Python scripts…", icon: "function", run: () => openScripts() },
+        ...(info && !info.scripts_trusted ? [{ label: "Enable scripts in this workbook", icon: "shield", run: () => enableScripts() }] : []),
+        ...(macros.length ? [{ divider: true } as MenuItem] : []),
+        ...macros.map((m) => ({ label: `Run: ${m.name}`, icon: "sparkles", run: () => runScript(m.id) })),
+        ...((info?.custom_functions || []).length
+          ? [{ divider: true } as MenuItem, { label: `Custom functions: ${info!.custom_functions.join(", ")}`, disabled: true }]
+          : []),
       ];
     },
   },

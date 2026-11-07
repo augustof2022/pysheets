@@ -156,18 +156,25 @@ def set_style(wb: Workbook, sheet_id: str, rects: list[list[int]], patch: dict) 
     sh = wb.sheet(sheet_id)
     wb._begin("Format", [])
     for r1, c1, r2, c2 in rects:
-        wb._ensure_cols(sh, c2) if c2 < 5000 else None
-        full_col = r1 <= 1 and r2 >= max(sh.nrows, 1)
-        if "fmt" in patch and full_col:
-            for c in range(c1, min(c2, len(sh.columns) - 1) + 1):
-                sh.columns[c].fmt = patch["fmt"]
-            patch = {k: v for k, v in patch.items() if k != "fmt"}
-            if not patch:
-                continue
-        entry = {"r1": r1, "r2": None if r2 >= sh.nrows and r1 >= 0 and full_col else r2, "c1": c1, "c2": c2}
-        if r1 == 0 and r2 >= sh.nrows:
-            entry["r2"] = None
-        # merge into an identical rectangle if one exists
+        _add_style(wb, sh, r1, c1, r2, c2, dict(patch))
+    wb._touch(sh)
+    return {"ok": True}
+
+
+def _add_style(
+    wb: Workbook, sh: Sheet, r1: int, c1: int, r2: int, c2: int, patch: dict, merge_same: bool = True
+):
+    if c2 < 5000:
+        wb._ensure_cols(sh, c2)
+    full_col = r1 <= 1 and r2 >= max(sh.nrows, 1)
+    if "fmt" in patch and full_col:
+        for c in range(c1, min(c2, len(sh.columns) - 1) + 1):
+            sh.columns[c].fmt = patch["fmt"]
+        patch = {k: v for k, v in patch.items() if k != "fmt"}
+        if not patch:
+            return
+    entry = {"r1": r1, "r2": None if (full_col or r2 >= sh.nrows + 1000) else r2, "c1": c1, "c2": c2}
+    if merge_same:
         for st in reversed(sh.styles):
             if all(st.get(k) == entry[k] for k in ("r1", "r2", "c1", "c2")):
                 st.update(patch)
@@ -175,13 +182,138 @@ def set_style(wb: Workbook, sheet_id: str, rects: list[list[int]], patch: dict) 
         else:
             entry.update(patch)
             sh.styles.append(entry)
+    else:
+        entry.update(patch)
+        sh.styles.append(entry)
     if len(sh.styles) > 20000:
         sh.styles = sh.styles[-20000:]
+
+
+BORDER_MODES = ("all", "outer", "inner", "horizontal", "vertical", "top", "bottom", "left", "right", "none")
+
+
+def set_borders(
+    wb: Workbook, sheet_id: str, rects: list[list[int]], mode: str, line: str = "thin", color: str = "#1f2937"
+) -> dict:
+    """Apply borders like Sheets' border menu.  Each edge is stored as ``"<line>:<color>"``."""
+    if mode not in BORDER_MODES:
+        raise EngineError(f"Unknown border mode {mode}")
+    sh = wb.sheet(sheet_id)
+    wb._begin("Borders", [])
+    spec = f"{line}:{color}"
+    for r1, c1, r2, c2 in rects:
+        open_end = r2 >= max(sh.nrows, 1) and r1 <= 1
+        r2 = max(r1, min(r2, sh.nrows + 1000))
+        parts: list[tuple[int, int, int, int, dict]] = []
+        if mode == "none":
+            parts.append((r1, c1, r2, c2, {"bt": None, "bb": None, "bl": None, "br": None}))
+            # neighbours drawing onto this range's outer edges
+            if r1 > 0:
+                parts.append((r1 - 1, c1, r1 - 1, c2, {"bb": None}))
+            if c1 > 0:
+                parts.append((r1, c1 - 1, r2, c1 - 1, {"br": None}))
+            parts.append((r2 + 1, c1, r2 + 1, c2, {"bt": None}))
+            parts.append((r1, c2 + 1, r2, c2 + 1, {"bl": None}))
+        if mode == "all":
+            parts.append((r1, c1, r2, c2, {"bt": spec, "bb": spec, "bl": spec, "br": spec}))
+        if mode in ("outer", "top"):
+            parts.append((r1, c1, r1, c2, {"bt": spec}))
+        if mode in ("outer", "bottom") and not open_end:
+            parts.append((r2, c1, r2, c2, {"bb": spec}))
+        if mode in ("outer", "left"):
+            parts.append((r1, c1, r2, c1, {"bl": spec}))
+        if mode in ("outer", "right"):
+            parts.append((r1, c2, r2, c2, {"br": spec}))
+        if mode in ("inner", "horizontal") and r2 > r1:
+            parts.append((r1, c1, r2 - 1, c2, {"bb": spec}))
+        if mode in ("inner", "vertical") and c2 > c1:
+            parts.append((r1, c1, r2, c2 - 1, {"br": spec}))
+        for pr1, pc1, pr2, pc2, patch in parts:
+            if open_end and pr2 >= r2:
+                pr2 = sh.nrows + 1000
+            _add_style(wb, sh, pr1, pc1, pr2, pc2, patch, merge_same=mode != "none")
     wb._touch(sh)
     return {"ok": True}
 
 
+# ------------------------------------------------------------------ merges
+
+
+def _overlap(a: dict, b: dict) -> bool:
+    return a["r1"] <= b["r2"] and b["r1"] <= a["r2"] and a["c1"] <= b["c2"] and b["c1"] <= a["c2"]
+
+
+def merge_cells(
+    wb: Workbook, sheet_id: str, rects: list[list[int]], mode: str = "all", dry_run: bool = False
+) -> dict:
+    """Merge (all / horizontal / vertical) or unmerge.  Only the top-left value of each merge is kept."""
+    from .workbook import q
+
+    sh = wb.sheet(sheet_id)
+    new: list[dict] = []
+    for r1, c1, r2, c2 in rects:
+        r2 = min(r2, max(sh.nrows, r1))
+        if mode == "all":
+            new.append({"r1": r1, "c1": c1, "r2": r2, "c2": c2})
+        elif mode == "horizontal":
+            new += [{"r1": r, "c1": c1, "r2": r, "c2": c2} for r in range(r1, r2 + 1)]
+        elif mode == "vertical":
+            new += [{"r1": r1, "c1": c, "r2": r2, "c2": c} for c in range(c1, c2 + 1)]
+        elif mode != "unmerge":
+            raise EngineError(f"Unknown merge mode {mode}")
+    new = [m for m in new if (m["r2"] > m["r1"] or m["c2"] > m["c1"])]
+    if sum((m["r2"] - m["r1"] + 1) * (m["c2"] - m["c1"] + 1) for m in new) > 2_000_000:
+        raise EngineError("That merge is too large")
+    # count values that would be lost
+    lost = 0
+    for m in new:
+        for c in range(m["c1"], min(m["c2"], len(sh.columns) - 1) + 1):
+            col = sh.columns[c]
+            lo, hi = max(m["r1"], 1) - 1, m["r2"] - 1
+            skip = f" AND __rid <> {m['r1'] - 1}" if c == m["c1"] and m["r1"] >= 1 else ""
+            if hi >= lo:
+                lost += wb.con.execute(
+                    f"SELECT count({q(col.id)}) FROM {q(sh.table)} WHERE __rid BETWEEN {lo} AND {hi}{skip}"
+                ).fetchone()[0]
+            if m["r1"] == 0 and c != m["c1"] and col.name:
+                lost += 1
+    if dry_run:
+        return {"lost": lost}
+    lo_all = min((r[0] for r in rects), default=0)
+    hi_all = max((r[2] for r in rects), default=0)
+    wb._begin(
+        "Unmerge" if mode == "unmerge" else "Merge cells", [(sh.id, "rect", lo_all, min(hi_all, sh.nrows))]
+    )
+    targets = [{"r1": r1, "c1": c1, "r2": r2, "c2": c2} for r1, c1, r2, c2 in rects]
+    sh.merges = [m for m in sh.merges if not any(_overlap(m, t) for t in targets)]
+    for m in new:
+        # clear everything but the anchor
+        for c in range(m["c1"], min(m["c2"], len(sh.columns) - 1) + 1):
+            col = sh.columns[c]
+            lo, hi = max(m["r1"], 1) - 1, m["r2"] - 1
+            skip = f" AND __rid <> {m['r1'] - 1}" if c == m["c1"] and m["r1"] >= 1 else ""
+            if hi >= lo:
+                wb.con.execute(
+                    f"UPDATE {q(sh.table)} SET {q(col.id)} = NULL WHERE __rid BETWEEN {lo} AND {hi}{skip}"
+                )
+            if m["r1"] == 0 and c != m["c1"]:
+                col.name = ""
+        for f in list(wb.formulas.values()):
+            if f.sheet_id != sh.id or f.kind != "cell":
+                continue
+            fc = sh.col_index(f.col_id)
+            if m["r1"] <= f.row <= m["r2"] and m["c1"] <= fc <= m["c2"] and (f.row, fc) != (m["r1"], m["c1"]):
+                wb._clear_spill(f)
+                del wb.formulas[f.id]
+        sh.merges.append(m)
+    wb.recalc([(sh.id, t["c1"], t["c2"], t["r1"], t["r2"]) for t in targets])
+    wb._touch(sh)
+    return {"ok": True, "lost": lost}
+
+
 def clear_styles(sh: Sheet, r1: int, r2: int, c1: int, c2: int):
+    rect = {"r1": r1, "c1": c1, "r2": r2, "c2": c2}
+    sh.merges = [m for m in sh.merges if not _overlap(m, rect)]
     keep = []
     for st in sh.styles:
         sr2 = st["r2"] if st["r2"] is not None else 1 << 60
@@ -217,6 +349,13 @@ def shift_rules_rows(sh: Sheet, fn):
         st["r1"], st["r2"] = res
         out.append(st)
     sh.styles = out
+    merges = []
+    for m in sh.merges:
+        res = fn(m["r1"], m["r2"])
+        if res is not None and res[1] is not None and (res[1] > res[0] or m["c2"] > m["c1"]):
+            m["r1"], m["r2"] = res
+            merges.append(m)
+    sh.merges = merges
     for rule in sh.cond_formats + sh.validations:
         res = fn(rule.get("r1") or 1, rule.get("r2"))
         if res is not None:
@@ -232,6 +371,13 @@ def shift_rules_cols(sh: Sheet, fn, removed: set | None = None):
         st["c1"], st["c2"] = res
         out.append(st)
     sh.styles = out
+    merges = []
+    for m in sh.merges:
+        res = fn(m["c1"], m["c2"])
+        if res is not None and (res[1] > res[0] or m["r2"] > m["r1"]):
+            m["c1"], m["c2"] = res
+            merges.append(m)
+    sh.merges = merges
     if removed:
         for rule in sh.cond_formats + sh.validations:
             rule["cols"] = [c for c in rule.get("cols", []) if c not in removed]

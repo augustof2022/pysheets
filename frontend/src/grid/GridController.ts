@@ -9,7 +9,7 @@
  * - Selection, fill handle and copy border are animated with critically-damped easing.
  */
 import { rpc } from "../api";
-import { formatCell, colLetters } from "../format";
+import { colLetters, fitNumber, formatCell, isNumericText } from "../format";
 import type { CellStyle, ColumnInfo, Flag, Rect, Selection, SheetInfo, Viewport } from "../types";
 
 export const BLOCK_R = 128;
@@ -375,6 +375,10 @@ export class GridController {
     const frozenC = c < this.fc;
     const x = this.xOf(this.colX[c], frozenC);
     const y = this.yOf(r * this.rowH, frozenR);
+    const m = this.mergeFor(r, c);
+    if (m && m.r1 === r && m.c1 === c) {
+      return { x, y, w: this.colX[Math.min(m.c2, this.totalCols - 1) + 1] - this.colX[c], h: (m.r2 - m.r1 + 1) * this.rowH };
+    }
     return { x, y, w: this.colX[c + 1] - this.colX[c], h: this.rowH };
   }
 
@@ -950,6 +954,23 @@ export class GridController {
   }
 
   setSel(sel: Selection, reason: "click" | "drag" | "key" | "api") {
+    const last = sel.ranges[sel.ranges.length - 1];
+    const m = this.mergeFor(sel.active.r, sel.active.c);
+    if (m && last.r1 === last.r2 && last.c1 === last.c2) {
+      // clicking any part of a merged cell selects the whole merge
+      sel = { ranges: [...sel.ranges.slice(0, -1), { ...m }], active: { r: m.r1, c: m.c1 }, anchor: { r: m.r1, c: m.c1 } };
+    } else if (reason === "drag" || reason === "key") {
+      // grow a range so it never cuts a merged cell in half
+      let g = { ...last };
+      for (let pass = 0; pass < 3; pass++) {
+        for (const mm of this.sheet?.filtered ? [] : this.sheet?.merges || []) {
+          if (mm.r1 <= g.r2 && mm.r2 >= g.r1 && mm.c1 <= g.c2 && mm.c2 >= g.c1) {
+            g = { r1: Math.min(g.r1, mm.r1), c1: Math.min(g.c1, mm.c1), r2: Math.max(g.r2, mm.r2), c2: Math.max(g.c2, mm.c2) };
+          }
+        }
+      }
+      sel = { ...sel, ranges: [...sel.ranges.slice(0, -1), g] };
+    }
     this.sel = sel;
     if (reason !== "drag") this.scrollIntoView(sel.active.r, sel.active.c, true);
     else {
@@ -1070,8 +1091,11 @@ export class GridController {
       this.setSel({ ranges: this.sel.ranges, active: { r, c }, anchor: this.sel.anchor }, "key");
       return;
     }
-    const r = Math.min(this.totalRows - 1, Math.max(0, active.r + dr));
-    const c = Math.min(this.totalCols - 1, Math.max(0, active.c + dc));
+    const m = this.mergeFor(active.r, active.c);
+    const baseR = m && dr > 0 ? m.r2 : active.r;
+    const baseC = m && dc > 0 ? m.c2 : active.c;
+    const r = Math.min(this.totalRows - 1, Math.max(0, baseR + dr));
+    const c = Math.min(this.totalCols - 1, Math.max(0, baseC + dc));
     this.selectCell(r, c);
   }
 
@@ -1242,14 +1266,38 @@ export class GridController {
     this.drawHeaders(vr0, vr1, vc0, vc1);
   }
 
+  private resolveStyle(styles: SheetInfo["styles"], srow: number, c: number): CellStyle | null {
+    let st: CellStyle | null = null;
+    if (styles.length && srow >= 0) {
+      for (const s of styles) {
+        if (c >= s.c1 && c <= s.c2 && srow >= s.r1 && (s.r2 === null || srow <= s.r2)) st = Object.assign({}, st ?? {}, s) as CellStyle;
+      }
+    }
+    return st;
+  }
+
+  /** Merges visible in a block of visual rows (merges are hidden while a filter is active). */
+  private visibleMerges(r0: number, r1: number, c0: number, c1: number): Rect[] {
+    const ms = this.sheet?.merges;
+    if (!ms || !ms.length || this.sheet?.filtered) return [];
+    return ms.filter((m) => m.r1 <= r1 && m.r2 >= r0 && m.c1 <= c1 && m.c2 >= c0);
+  }
+
+  mergeFor(r: number, c: number): Rect | null {
+    const ms = this.sheet?.merges;
+    if (!ms || !ms.length || this.sheet?.filtered) return null;
+    for (const m of ms) if (r >= m.r1 && r <= m.r2 && c >= m.c1 && c <= m.c2) return m;
+    return null;
+  }
+
   private drawCells(r0: number, r1: number, c0: number, c1: number, fx: boolean, fy: boolean, now: number) {
     const ctx = this.ctx;
     const t = this.theme;
     const sh = this.sheet!;
-    const cols = sh.columns;
     const rowH = this.rowH;
     const styles = this.visibleStyles(this.sheetRow(r0), Math.max(this.sheetRow(r1), r1), c0, c1);
-    const cfRules = sh.cond_formats;
+    const merges = this.visibleMerges(r0, r1, c0, c1);
+    const borders: { x: number; y: number; w: number; h: number; st: CellStyle }[] = [];
     // backgrounds + text
     for (let r = r0; r <= r1; r++) {
       const y = this.yOf(r * rowH, fy);
@@ -1263,9 +1311,8 @@ export class GridController {
       for (let c = c0; c <= c1; c++) {
         const x = this.xOf(this.colX[c], fx);
         const w = this.colX[c + 1] - this.colX[c];
-        const col: ColumnInfo | undefined = cols[c];
-        const loaded = this.hasValue(r, c);
-        if (!loaded) {
+        if (merges.length && merges.some((m) => r >= m.r1 && r <= m.r2 && c >= m.c1 && c <= m.c2)) continue;
+        if (!this.hasValue(r, c)) {
           if (c < sh.ncols && (isHeader || (srow > 0 && srow <= sh.nrows) || sh.filtered)) {
             this.hasLoadingVisible = true;
             const phase = (now / 900 + c * 0.07 + r * 0.03) % 1;
@@ -1278,122 +1325,9 @@ export class GridController {
           }
           continue;
         }
-        const v = this.value(r, c);
-        // resolve style
-        let st: CellStyle | null = null;
-        if (styles.length && srow >= 0) {
-          for (const s of styles) {
-            if (c >= s.c1 && c <= s.c2 && srow >= s.r1 && (s.r2 === null || srow <= s.r2)) st = Object.assign({}, st ?? {}, s) as CellStyle;
-          }
-        }
-        let bg = st?.bg || null;
-        let fg = st?.fg || null;
-        let bold = st?.bold || isHeader;
-        let italic = st?.italic;
-        let strike = st?.strike;
-        let invalid = false;
-        let scaleColor: string | null = null;
-        const flags = r > 0 ? this.flagsAt(r, c) : undefined;
-        if (flags) {
-          for (const f of flags) {
-            if (f[2] === "cf") {
-              const rule = cfRules[f[4]];
-              const s = rule?.style;
-              if (s) {
-                if (s.bg) bg = s.bg;
-                if (s.fg) fg = s.fg;
-                if (s.bold) bold = true;
-                if (s.italic) italic = true;
-                if (s.strike) strike = true;
-              }
-            } else if (f[2] === "scale") {
-              const rule = cfRules[f[4]];
-              scaleColor = scaleAt(rule?.colors || ["#f8d0cf", "#fff3c4", "#c7ecd6"], Number(f[3]));
-            } else if (f[2] === "invalid") invalid = true;
-          }
-        }
-        if (scaleColor) bg = scaleColor;
-        if (bg) {
-          ctx.fillStyle = bg;
-          ctx.fillRect(x, y, w, rowH);
-          // keep text readable on custom fills in both themes
-          if (!fg) fg = isLight(bg) ? "#1f2328" : "#f3f4f6";
-        }
-        const err = r >= 0 ? this.errorCells.get(`${srow}:${c}`) : undefined;
-        if (this.checkboxCols.has(c) && r > 0 && (v === true || v === false || v === "TRUE" || v === "FALSE" || v === null)) {
-          this.drawCheckbox(x + w / 2, y + rowH / 2, v === true || v === "TRUE");
-        } else if (err) {
-          ctx.font = FONT_BOLD;
-          ctx.fillStyle = t.error;
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.fillText(err.split(" ")[0], x + w / 2, y + rowH / 2 + 0.5);
-          ctx.fillStyle = t.error;
-          ctx.beginPath();
-          ctx.moveTo(x + w - 7, y + 1);
-          ctx.lineTo(x + w - 1, y + 1);
-          ctx.lineTo(x + w - 1, y + 7);
-          ctx.fill();
-        } else if (v !== null && v !== undefined && v !== "") {
-          const fmt = st?.fmt ?? (isHeader ? null : col?.fmt);
-          const f = formatCell(v, isHeader ? "str" : col?.type, fmt);
-          const align = st?.align || f.align;
-          const font = bold ? FONT_BOLD : FONT;
-          const fontUse = italic ? `italic ${font}` : font;
-          ctx.font = fontUse;
-          ctx.fillStyle = fg || (isHeader ? t.row0Text : f.negative && fmt?.includes("(") ? t.negative : t.text);
-          ctx.textBaseline = "middle";
-          let text = f.text;
-          let tw = this.measure(text, fontUse);
-          let avail = w - 2 * PAD;
-          if (isHeader && sh.filter_on && c < sh.ncols) avail -= 18;
-          if (isHeader && col && sh.columns.length) avail -= 0;
-          // let text overflow into empty neighbours (like Sheets)
-          let overflow = 0;
-          if (tw > avail && align === "left" && !isHeader) {
-            let cc = c + 1;
-            while (cc <= c1 + 3 && cc < this.totalCols && tw > avail + overflow) {
-              const nv = this.value(r, cc);
-              if (nv !== null && nv !== undefined && nv !== "") break;
-              overflow += this.colX[cc + 1] - this.colX[cc];
-              cc++;
-            }
-          }
-          if (tw > avail + overflow) {
-            if (typeof v === "number" && align === "right" && !isHeader) {
-              text = "#".repeat(Math.max(1, Math.floor(avail / this.measure("#", fontUse))));
-              tw = this.measure(text, fontUse);
-            }
-          }
-          const needsClip = tw > avail + overflow;
-          if (needsClip) {
-            ctx.save();
-            ctx.beginPath();
-            const filterGap = isHeader && sh.filter_on && c < sh.ncols ? 22 : 0;
-            ctx.rect(x + 1, y, w - 2 + overflow - filterGap, rowH);
-            ctx.clip();
-          }
-          let tx = x + PAD;
-          if (align === "right") tx = x + w - PAD - tw - (isHeader && sh.filter_on ? 18 : 0);
-          else if (align === "center") tx = x + (w - tw) / 2;
-          ctx.textAlign = "left";
-          ctx.fillText(text, tx, y + rowH / 2 + 0.5);
-          if (strike) {
-            ctx.fillRect(tx, y + rowH / 2, tw, 1);
-          }
-          if (st?.underline) ctx.fillRect(tx, y + rowH / 2 + 7, tw, 1);
-          if (needsClip) ctx.restore();
-        }
-        if (invalid) {
-          ctx.fillStyle = t.invalid;
-          ctx.beginPath();
-          ctx.moveTo(x + w - 7, y + 1);
-          ctx.lineTo(x + w - 1, y + 1);
-          ctx.lineTo(x + w - 1, y + 7);
-          ctx.fill();
-        }
-        if (isHeader && sh.filter_on && c < sh.ncols) this.drawFilterButton(x + w - 22, y + 4, !!(col && sh.filters[col.id]));
-        if (r > 0 && this.dropdownCols.has(c) && this.sel.active.r === r && this.sel.active.c === c) this.drawChevron(x + w - 16, y + rowH / 2);
+        const st = this.resolveStyle(styles, srow, c);
+        this.paintCell(r, c, srow, x, y, w, rowH, st, c1, false);
+        if (st && (st.bt || st.bb || st.bl || st.br)) borders.push({ x, y, w, h: rowH, st });
       }
     }
     // grid lines
@@ -1415,13 +1349,174 @@ export class GridController {
       ctx.lineTo(xR, y);
     }
     ctx.stroke();
-    if (r0 === 0 && !fy === false) {
-      /* header row bottom border drawn below */
-    }
     if (r0 <= 0 && r1 >= 0) {
       ctx.fillStyle = t.gridStrong;
       ctx.fillRect(xL, this.yOf(rowH, fy) - 1, xR - xL, 1);
     }
+    // merged cells cover the grid lines inside them
+    for (const m of merges) {
+      const x = this.xOf(this.colX[m.c1], fx);
+      const y = this.yOf(m.r1 * rowH, fy);
+      const w = this.colX[Math.min(m.c2, this.totalCols - 1) + 1] - this.colX[m.c1];
+      const h = (m.r2 - m.r1 + 1) * rowH;
+      ctx.fillStyle = m.r1 === 0 ? t.row0Bg : t.bg;
+      ctx.fillRect(x, y, w - 1, h - 1);
+      const st = this.resolveStyle(this.sheet!.styles, m.r1, m.c1);
+      if (this.hasValue(m.r1, m.c1)) this.paintCell(m.r1, m.c1, m.r1, x, y, w, h, st, c1, true);
+      if (st && (st.bt || st.bb || st.bl || st.br)) borders.push({ x, y, w, h, st });
+    }
+    for (const b of borders) this.drawBorders(b.x, b.y, b.w, b.h, b.st);
+  }
+
+  /** Paint one cell (or a merged block) at the given screen rectangle. */
+  private paintCell(r: number, c: number, srow: number, x: number, y: number, w: number, h: number, st: CellStyle | null, cMax: number, merged: boolean) {
+    const ctx = this.ctx;
+    const t = this.theme;
+    const sh = this.sheet!;
+    const col: ColumnInfo | undefined = sh.columns[c];
+    const cfRules = sh.cond_formats;
+    const isHeader = r === 0;
+    const v = this.value(r, c);
+    let bg = st?.bg || null;
+    let fg = st?.fg || null;
+    let bold = st?.bold || isHeader;
+    let italic = st?.italic;
+    let strike = st?.strike;
+    let invalid = false;
+    let scaleColor: string | null = null;
+    const flags = r > 0 ? this.flagsAt(r, c) : undefined;
+    if (flags) {
+      for (const f of flags) {
+        if (f[2] === "cf") {
+          const s = cfRules[f[4]]?.style;
+          if (s) {
+            if (s.bg) bg = s.bg;
+            if (s.fg) fg = s.fg;
+            if (s.bold) bold = true;
+            if (s.italic) italic = true;
+            if (s.strike) strike = true;
+          }
+        } else if (f[2] === "scale") {
+          scaleColor = scaleAt(cfRules[f[4]]?.colors || ["#f8d0cf", "#fff3c4", "#c7ecd6"], Number(f[3]));
+        } else if (f[2] === "invalid") invalid = true;
+      }
+    }
+    if (scaleColor) bg = scaleColor;
+    if (bg) {
+      ctx.fillStyle = bg;
+      ctx.fillRect(x, y, merged ? w - 1 : w, merged ? h - 1 : h);
+      // keep text readable on custom fills in both themes
+      if (!fg) fg = isLight(bg) ? "#1f2328" : "#f3f4f6";
+    }
+    const err = this.errorCells.get(`${srow}:${c}`);
+    if (this.checkboxCols.has(c) && r > 0 && (v === true || v === false || v === "TRUE" || v === "FALSE" || v === null)) {
+      this.drawCheckbox(x + w / 2, y + h / 2, v === true || v === "TRUE");
+    } else if (err) {
+      ctx.font = FONT_BOLD;
+      ctx.fillStyle = t.error;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(err.split(" ")[0], x + w / 2, y + h / 2 + 0.5);
+      ctx.beginPath();
+      ctx.moveTo(x + w - 7, y + 1);
+      ctx.lineTo(x + w - 1, y + 1);
+      ctx.lineTo(x + w - 1, y + 7);
+      ctx.fill();
+    } else if (v !== null && v !== undefined && v !== "") {
+      const fmt = st?.fmt ?? (isHeader ? null : col?.fmt);
+      const f = formatCell(v, isHeader ? "str" : col?.type, fmt);
+      const align = st?.align || (merged && typeof v === "string" ? "center" : f.align);
+      const font = bold ? FONT_BOLD : FONT;
+      const fontUse = italic ? `italic ${font}` : font;
+      ctx.font = fontUse;
+      ctx.fillStyle = fg || (isHeader ? t.row0Text : f.negative && fmt?.includes("(") ? t.negative : t.text);
+      ctx.textBaseline = "middle";
+      let text = f.text;
+      let tw = this.measure(text, fontUse);
+      const filterGap = isHeader && sh.filter_on && c < sh.ncols && !merged ? 18 : 0;
+      const avail = w - 2 * PAD - filterGap;
+      // let text overflow into empty neighbours (like Sheets)
+      let overflow = 0;
+      if (tw > avail && align === "left" && !isHeader && !merged) {
+        let cc = c + 1;
+        while (cc <= cMax + 3 && cc < this.totalCols && tw > avail + overflow) {
+          const nv = this.value(r, cc);
+          if (nv !== null && nv !== undefined && nv !== "") break;
+          if (this.mergeFor(r, cc)) break;
+          overflow += this.colX[cc + 1] - this.colX[cc];
+          cc++;
+        }
+      }
+      const numeric = !isHeader && (typeof v === "number" || (f.align === "right" && typeof v === "string" && isNumericText(v)));
+      if (tw > avail + overflow && numeric && align !== "left") {
+        const auto = !fmt || fmt === "auto" || fmt === "General";
+        const fitted = auto ? fitNumber(Number(v), (s) => this.measure(s, fontUse) <= avail) : null;
+        text = fitted ?? "#".repeat(Math.max(1, Math.floor(avail / this.measure("#", fontUse))));
+        tw = this.measure(text, fontUse);
+      }
+      const needsClip = tw > avail + overflow;
+      if (needsClip) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x + 1, y, w - 2 + overflow - (filterGap ? 22 : 0), h);
+        ctx.clip();
+      }
+      let tx = x + PAD;
+      if (align === "right") tx = x + w - PAD - tw - filterGap;
+      else if (align === "center") tx = x + (w - tw) / 2;
+      ctx.textAlign = "left";
+      const ty = y + h / 2 + 0.5;
+      ctx.fillText(text, tx, ty);
+      if (strike) ctx.fillRect(tx, ty - 0.5, tw, 1);
+      if (st?.underline) ctx.fillRect(tx, ty + 6.5, tw, 1);
+      if (needsClip) ctx.restore();
+    }
+    if (invalid) {
+      ctx.fillStyle = t.invalid;
+      ctx.beginPath();
+      ctx.moveTo(x + w - 7, y + 1);
+      ctx.lineTo(x + w - 1, y + 1);
+      ctx.lineTo(x + w - 1, y + 7);
+      ctx.fill();
+    }
+    if (isHeader && sh.filter_on && c < sh.ncols && !merged) this.drawFilterButton(x + w - 22, y + 4, !!(col && sh.filters[col.id]));
+    if (r > 0 && this.dropdownCols.has(c) && this.sel.active.r === r && this.sel.active.c === c) this.drawChevron(x + w - 16, y + h / 2);
+  }
+
+  private drawBorders(x: number, y: number, w: number, h: number, st: CellStyle) {
+    const ctx = this.ctx;
+    const edge = (spec: string | null | undefined, x1: number, y1: number, x2: number, y2: number) => {
+      if (!spec) return;
+      const [line, color] = spec.split(":");
+      const width = line === "thick" ? 3 : line === "medium" ? 2 : 1;
+      ctx.strokeStyle = color || this.theme.text;
+      ctx.lineWidth = width;
+      ctx.setLineDash(line === "dashed" ? [5, 3] : line === "dotted" ? [1.5, 2.5] : []);
+      const off = width % 2 ? 0.5 / this.dpr : 0;
+      ctx.beginPath();
+      if (line === "double") {
+        ctx.lineWidth = 1;
+        const dx = y1 === y2 ? 0 : 1.5;
+        const dy = y1 === y2 ? 1.5 : 0;
+        ctx.moveTo(x1 - dx, y1 - dy);
+        ctx.lineTo(x2 - dx, y2 - dy);
+        ctx.moveTo(x1 + dx, y1 + dy);
+        ctx.lineTo(x2 + dx, y2 + dy);
+      } else {
+        ctx.moveTo(x1 + (x1 === x2 ? off : 0), y1 + (y1 === y2 ? off : 0));
+        ctx.lineTo(x2 + (x1 === x2 ? off : 0), y2 + (y1 === y2 ? off : 0));
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    };
+    const L = Math.round(x) - 1;
+    const T = Math.round(y) - 1;
+    const R = Math.round(x + w) - 1;
+    const B = Math.round(y + h) - 1;
+    edge(st.bt, L, T, R + 1, T);
+    edge(st.bb, L, B, R + 1, B);
+    edge(st.bl, L, T, L, B + 1);
+    edge(st.br, R, T, R, B + 1);
   }
 
   private drawOverlays(fx: boolean, fy: boolean, now: number) {
@@ -1453,7 +1548,8 @@ export class GridController {
     // primary range (animated)
     const a = this.anim;
     const pr = ranges[ranges.length - 1];
-    const single = pr.r1 === pr.r2 && pr.c1 === pr.c2;
+    const am = this.mergeFor(this.sel.active.r, this.sel.active.c);
+    const single = (pr.r1 === pr.r2 && pr.c1 === pr.c2) || (!!am && am.r1 === pr.r1 && am.c1 === pr.c1 && am.r2 === pr.r2 && am.c2 === pr.c2);
     if (!single) {
       ctx.fillStyle = t.selFill;
       ctx.fillRect(ox(a.x), oy(a.y), a.w, a.h);

@@ -15,6 +15,7 @@ class Column:
     duck: str = "VARCHAR"
     width: int = 120
     fmt: str | None = None
+    linked: bool = False  # filled by a data connection (replaced on refresh)
 
     @property
     def typ(self) -> str:
@@ -28,6 +29,7 @@ class Column:
             "duck": self.duck,
             "width": self.width,
             "fmt": self.fmt,
+            "linked": self.linked,
         }
 
 
@@ -68,6 +70,7 @@ class Sheet:
     view_table: str | None = None
     nview: int = 0
     styles: list[dict] = field(default_factory=list)
+    merges: list[dict] = field(default_factory=list)  # {r1, c1, r2, c2} in sheet rows / column positions
     cond_formats: list[dict] = field(default_factory=list)
     validations: list[dict] = field(default_factory=list)
     pivot: dict | None = None
@@ -75,6 +78,7 @@ class Sheet:
     version: int = 0
     row_height: int = 26
     source: str | None = None
+    link: dict | None = None  # data connection (Google Sheets, ...) used by Refresh
 
     def col_index(self, col_id: str) -> int:
         for i, c in enumerate(self.columns):
@@ -104,6 +108,7 @@ class Sheet:
             "filtered": self.view_table is not None,
             "nview": self.nview if self.view_table is not None else self.nrows,
             "styles": self.styles,
+            "merges": self.merges,
             "cond_formats": self.cond_formats,
             "validations": self.validations,
             "pivot": self.pivot,
@@ -111,6 +116,7 @@ class Sheet:
             "version": self.version,
             "row_height": self.row_height,
             "source": self.source,
+            "link": self.link,
         }
 
     def to_meta(self) -> dict:
@@ -121,6 +127,7 @@ class Sheet:
     @classmethod
     def from_meta(cls, d: dict) -> Sheet:
         d = dict(d)
+        d.setdefault("merges", [])
         cols = [Column(**c) for c in d.pop("columns")]
         sh = cls(**d)
         sh.columns = cols

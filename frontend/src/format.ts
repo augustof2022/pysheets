@@ -21,9 +21,30 @@ export function autoNumber(n: number): string {
   if (Number.isInteger(n) && Math.abs(n) < 1e15) return String(n);
   const abs = Math.abs(n);
   if (abs !== 0 && (abs >= 1e15 || abs < 1e-9)) return n.toExponential(4).replace(/\.?0+e/, "e");
-  // trim floating noise (4.199999999999999 -> 4.2)
-  const s = parseFloat(n.toPrecision(12)).toString();
+  // trim floating noise (4.199999999999999 -> 4.2, 40000.00000003 -> 40000)
+  const s = parseFloat(n.toPrecision(10)).toString();
   return s;
+}
+
+/** Shorten an automatic-format number until `fits` accepts it (Sheets-style): fewer decimals, then scientific. */
+export function fitNumber(n: number, fits: (s: string) => boolean): string | null {
+  if (!isFinite(n)) return null;
+  const abs = Math.abs(n);
+  const intDigits = abs >= 1 ? Math.floor(Math.log10(abs)) + 1 : 1;
+  for (let dec = Math.max(0, 10 - intDigits); dec >= 0; dec--) {
+    const s = parseFloat(n.toFixed(dec)).toString();
+    if (s.includes("e")) break;
+    if (fits(s)) return s;
+  }
+  for (let p = 6; p >= 1; p--) {
+    const s = n.toExponential(p - 1).replace(/\.?0+e/, "e");
+    if (fits(s)) return s;
+  }
+  return null;
+}
+
+export function isNumericText(s: string): boolean {
+  return NUMERIC_RE.test(s);
 }
 
 interface NumFmt {

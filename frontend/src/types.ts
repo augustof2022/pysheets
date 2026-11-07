@@ -7,6 +7,7 @@ export interface ColumnInfo {
   duck: string;
   width: number;
   fmt: string | null;
+  linked?: boolean;
 }
 
 export interface CellStyle {
@@ -19,6 +20,10 @@ export interface CellStyle {
   align?: "left" | "center" | "right" | null;
   fmt?: string | null;
   wrap?: boolean;
+  bt?: string | null; // borders: "<thin|medium|thick|dashed|dotted|double>:<color>"
+  bb?: string | null;
+  bl?: string | null;
+  br?: string | null;
 }
 
 export interface StyleRange extends CellStyle {
@@ -103,6 +108,7 @@ export interface SheetInfo {
   filtered: boolean;
   nview: number;
   styles: StyleRange[];
+  merges: Rect[];
   cond_formats: CondFormat[];
   validations: Validation[];
   pivot: PivotSpec | null;
@@ -110,6 +116,7 @@ export interface SheetInfo {
   version: number;
   row_height: number;
   source: string | null;
+  link: { kind: string; tab?: string; refreshed_at?: string; rows?: number; sources?: number; group?: string; spreadsheet_id?: string } | null;
   formulas: FormulaCell[];
 }
 
@@ -122,6 +129,9 @@ export interface WorkbookInfo {
   can_redo: boolean;
   undo_label: string | null;
   redo_label: string | null;
+  scripts: { id: string; name: string; kind: "macro" | "functions" | "file" }[];
+  scripts_trusted: boolean;
+  custom_functions: string[];
   sheets: SheetInfo[];
 }
 

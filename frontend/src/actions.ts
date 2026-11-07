@@ -382,6 +382,30 @@ export function currentStyle(): CellStyle {
   return st;
 }
 
+export async function applyBorders(mode: string, line = "thin", color = "#1f2937") {
+  const rects = selectionRects().map((r) => [r.r1, r.c1, r.r2, r.c2]);
+  await call("style.borders", { sheet: sheetId(), rects, mode, line, color });
+  grid?.invalidateDraw();
+}
+
+export async function mergeCells(mode: "all" | "horizontal" | "vertical" | "unmerge") {
+  const sh = currentSheet();
+  if (!sh) return;
+  if (sh.filtered) {
+    toast("Turn off the filter to merge cells", "error");
+    return;
+  }
+  const rects = selectionRects().map((r) => [r.r1, r.c1, Math.min(r.r2, Math.max(sh.nrows, r.r1)), r.c2]);
+  if (mode !== "unmerge") {
+    const check = await query<{ lost: number }>("cells.merge_check", { sheet: sh.id, rects, mode });
+    if (!check) return;
+    if (check.lost > 0 && !window.confirm(`Merging keeps only the upper-left value. ${check.lost.toLocaleString()} other value(s) will be removed. Continue?`)) return;
+  }
+  await call("cells.merge", { sheet: sh.id, rects, mode });
+  invalidate();
+  refreshCell();
+}
+
 export async function toggleStyle(key: "bold" | "italic" | "strike" | "underline") {
   const cur = currentStyle();
   await applyStyle({ [key]: !cur[key] });
@@ -406,6 +430,26 @@ export async function changeDecimals(delta: number) {
   const cur = currentStyle();
   const v = grid?.value(get().sel.active.r, get().sel.active.c);
   await setNumberFormat(bumpDecimals(cur.fmt, delta, typeof v === "number" ? v : undefined));
+}
+
+export async function refreshLinked(sheet?: string) {
+  const sh = sheet ? useApp.getState().info?.sheets.find((s) => s.id === sheet) : currentSheet();
+  if (!sh?.link) {
+    toast("This sheet isn't linked to Google Sheets", "info");
+    return;
+  }
+  const r = await call<{ rows?: number | Record<string, number> }>("links.refresh", { sheet: sh.id }, { label: "Refreshing from Google Sheets" });
+  if (r) {
+    const rows = typeof r.rows === "number" ? r.rows : Object.values(r.rows || {}).reduce((a, b) => a + b, 0);
+    toast(`Refreshed · ${rows.toLocaleString()} rows`, "success");
+  }
+  invalidate();
+}
+
+export async function refreshAll() {
+  const r = await call<{ refreshed: number; errors: string[] }>("links.refresh_all", {}, { label: "Refreshing all data" });
+  if (r) toast(r.errors.length ? `Refreshed ${r.refreshed}; ${r.errors.length} failed: ${r.errors[0]}` : `Refreshed ${r.refreshed} connection(s)`, r.errors.length ? "error" : "success");
+  invalidate();
 }
 
 export async function undo() {
