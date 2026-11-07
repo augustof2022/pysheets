@@ -35,7 +35,7 @@ Every push builds the Windows app in GitHub Actions (**Actions → Windows app �
 * `PySheets-<version>-windows-x64.zip`: portable folder; run `PySheets.exe`.
 
 To publish a GitHub Release, run **Actions → Windows app → Run workflow** and enter a version
-such as `v0.3.0` in *release*; the workflow creates the tag and attaches both files. Pushing a
+such as `v0.3.1` in *release*; the workflow creates the tag and attaches both files. Pushing a
 `v*` tag does the same.
 The app needs the Microsoft Edge WebView2 runtime, which ships with Windows 10 and 11.
 
