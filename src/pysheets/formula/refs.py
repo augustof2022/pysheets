@@ -40,9 +40,7 @@ def cell_name(row: int, col: int) -> str:
 
 
 def quote_sheet(name: str) -> str:
-    if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name) and not re.match(
-        r"^[A-Za-z]{1,3}[0-9]+$", name
-    ):
+    if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name) and not re.match(r"^[A-Za-z]{1,3}[0-9]+$", name):
         return name
     return "'" + name.replace("'", "''") + "'"
 
@@ -86,8 +84,13 @@ class Ref:
 
         a = part(self.r1, self.c1, self.ar1, self.ac1)
         prefix = (quote_sheet(self.sheet) + "!") if self.sheet else ""
-        if self.is_cell or (self.r1 == self.r2 and self.c1 == self.c2 and not self.rng
-                            and self.r1 is not None and self.c1 is not None):
+        if self.is_cell or (
+            self.r1 == self.r2
+            and self.c1 == self.c2
+            and not self.rng
+            and self.r1 is not None
+            and self.c1 is not None
+        ):
             return prefix + a
         b = part(self.r2, self.c2, self.ar2, self.ac2)
         return f"{prefix}{a}:{b}"

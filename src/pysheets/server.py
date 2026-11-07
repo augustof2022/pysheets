@@ -52,8 +52,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store" if ctype.startswith(("application/json", "text/html")) else
-                         "public, max-age=31536000, immutable")
+        self.send_header(
+            "Cache-Control",
+            "no-store"
+            if ctype.startswith(("application/json", "text/html"))
+            else "public, max-age=31536000, immutable",
+        )
         self.send_header("X-Content-Type-Options", "nosniff")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
@@ -154,7 +158,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(_clean(res))
         if parsed.path == "/api/upload":
             name = os.path.basename((query.get("name") or ["upload.bin"])[0]) or "upload.bin"
-            dest = self.server.upload_dir / f"{secrets.token_hex(4)}_{name}"
+            folder = self.server.upload_dir / secrets.token_hex(6)
+            folder.mkdir(parents=True, exist_ok=True)
+            dest = folder / name  # keep the original name: it becomes the sheet name
             remaining = int(self.headers.get("Content-Length") or 0)
             with open(dest, "wb") as fh:
                 while remaining > 0:
@@ -178,7 +184,9 @@ def _clean(obj):
     return obj
 
 
-def make_server(wb: Workbook, port: int = 0, token: str | None = "auto", web_dir: Path = WEB_DIR) -> AppServer:
+def make_server(
+    wb: Workbook, port: int = 0, token: str | None = "auto", web_dir: Path = WEB_DIR
+) -> AppServer:
     if token == "auto":
         token = secrets.token_urlsafe(24)
     return AppServer(("127.0.0.1", port), wb, token, web_dir)

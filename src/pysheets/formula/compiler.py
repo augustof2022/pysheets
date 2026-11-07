@@ -104,9 +104,26 @@ def sql_str(s: str) -> str:
 
 def duck_to_typ(duck: str) -> str:
     d = duck.upper()
-    if d.startswith(("BIGINT", "INTEGER", "DOUBLE", "DECIMAL", "FLOAT", "HUGEINT", "SMALLINT",
-                     "TINYINT", "UBIGINT", "UINTEGER", "USMALLINT", "UTINYINT", "REAL",
-                     "UHUGEINT", "NUMERIC", "INT")):
+    if d.startswith(
+        (
+            "BIGINT",
+            "INTEGER",
+            "DOUBLE",
+            "DECIMAL",
+            "FLOAT",
+            "HUGEINT",
+            "SMALLINT",
+            "TINYINT",
+            "UBIGINT",
+            "UINTEGER",
+            "USMALLINT",
+            "UTINYINT",
+            "REAL",
+            "UHUGEINT",
+            "NUMERIC",
+            "INT",
+        )
+    ):
         return NUM
     if d == "BOOLEAN":
         return BOOL
@@ -131,8 +148,10 @@ def num(x: S) -> str:
         return f"CAST(({x.sql} - DATE '1899-12-30') AS DOUBLE)"
     if x.typ == TS:
         return f"(epoch({x.sql}) / 86400.0 + 25569)"
-    return (f"(CASE WHEN {x.sql} IS NULL OR {x.sql} = '' THEN CAST(0 AS DOUBLE) "
-            f"ELSE TRY_CAST({x.sql} AS DOUBLE) END)")
+    return (
+        f"(CASE WHEN {x.sql} IS NULL OR {x.sql} = '' THEN CAST(0 AS DOUBLE) "
+        f"ELSE TRY_CAST({x.sql} AS DOUBLE) END)"
+    )
 
 
 def num_nullable(x: S) -> str:
@@ -157,9 +176,11 @@ def txt(x: S) -> str:
         return "CAST(NULL AS VARCHAR)"
     if x.typ == NUM:
         v = x.sql
-        return (f"(CASE WHEN {v} IS NULL THEN NULL WHEN isfinite({v}) AND {v} = trunc({v}) "
-                f"AND abs({v}) < 1e15 THEN CAST(CAST({v} AS HUGEINT) AS VARCHAR) "
-                f"ELSE CAST(CAST({v} AS DOUBLE) AS VARCHAR) END)")
+        return (
+            f"(CASE WHEN {v} IS NULL THEN NULL WHEN isfinite({v}) AND {v} = trunc({v}) "
+            f"AND abs({v}) < 1e15 THEN CAST(CAST({v} AS HUGEINT) AS VARCHAR) "
+            f"ELSE CAST(CAST({v} AS DOUBLE) AS VARCHAR) END)"
+        )
     if x.typ == BOOL:
         return f"(CASE WHEN {x.sql} IS NULL THEN NULL WHEN {x.sql} THEN 'TRUE' ELSE 'FALSE' END)"
     if x.typ == DATE:
@@ -182,8 +203,10 @@ def boo(x: S) -> str:
         return f"({x.sql} <> 0)"
     if x.typ in (DATE, TS):
         return f"({x.sql} IS NOT NULL)"
-    return (f"(CASE WHEN upper({x.sql}) = 'TRUE' THEN TRUE WHEN upper({x.sql}) = 'FALSE' "
-            f"THEN FALSE ELSE TRY_CAST({x.sql} AS DOUBLE) <> 0 END)")
+    return (
+        f"(CASE WHEN upper({x.sql}) = 'TRUE' THEN TRUE WHEN upper({x.sql}) = 'FALSE' "
+        f"THEN FALSE ELSE TRY_CAST({x.sql} AS DOUBLE) <> 0 END)"
+    )
 
 
 def as_date(x: S) -> str:
@@ -253,8 +276,7 @@ def compare(a: S, b: S, op: str) -> S:
         other = a if (is_empty_str(b) or b.typ == NULL) else b
         if other.typ == NULL or is_empty_str(other):
             return S("TRUE" if op == "=" else "FALSE", BOOL)
-        test = (f"({other.sql} IS NULL OR {txt(other)} = '')" if other.typ == STR
-                else f"({other.sql} IS NULL)")
+        test = f"({other.sql} IS NULL OR {txt(other)} = '')" if other.typ == STR else f"({other.sql} IS NULL)"
         return S(test if op == "=" else f"(NOT {test})", BOOL)
     ta, tb = a.typ, b.typ
     if ta == STR and tb == STR:
@@ -264,8 +286,11 @@ def compare(a: S, b: S, op: str) -> S:
             return S(f"({as_ts(a)} {o} {as_ts(b)})", BOOL)
         d, other = (a, b) if ta in (DATE, TS) else (b, a)
         if other.typ == STR:
-            lhs, rhs = (as_ts(a), f"TRY_CAST({b.sql} AS TIMESTAMP)") if d is a else (
-                f"TRY_CAST({a.sql} AS TIMESTAMP)", as_ts(b))
+            lhs, rhs = (
+                (as_ts(a), f"TRY_CAST({b.sql} AS TIMESTAMP)")
+                if d is a
+                else (f"TRY_CAST({a.sql} AS TIMESTAMP)", as_ts(b))
+            )
             return S(f"({lhs} {o} {rhs})", BOOL)
     return S(f"({num(a)} {o} {num(b)})", BOOL)
 
@@ -454,8 +479,9 @@ class Compiler:
             if same and d == 0:
                 return S(f't."{col.id}"', col.typ)
             x = self.alias("x")
-            return S(f'(SELECT {x}."{col.id}" FROM "{sh.table}" AS {x} '
-                     f'WHERE {x}.__rid = t.__rid + ({d}))', col.typ)
+            return S(
+                f'(SELECT {x}."{col.id}" FROM "{sh.table}" AS {x} WHERE {x}.__rid = t.__rid + ({d}))', col.typ
+            )
         rid = R - 1
         if rid >= sh.nrows:
             return S(f"CAST(NULL AS {self._duck_type(col.typ)})", col.typ)
@@ -464,8 +490,9 @@ class Compiler:
 
     @staticmethod
     def _duck_type(typ: str) -> str:
-        return {NUM: "DOUBLE", STR: "VARCHAR", BOOL: "BOOLEAN", DATE: "DATE",
-                TS: "TIMESTAMP"}.get(typ, "VARCHAR")
+        return {NUM: "DOUBLE", STR: "VARCHAR", BOOL: "BOOLEAN", DATE: "DATE", TS: "TIMESTAMP"}.get(
+            typ, "VARCHAR"
+        )
 
     def range_value(self, sh, ref: Ref) -> A:
         ncols_sheet = len(sh.columns)
@@ -482,8 +509,7 @@ class Compiler:
         )
         if rel_rows:
             # Same-row horizontal range in row mode: inline row vector.
-            if (ref.r1 == ref.r2 and not ref.ar1 and not ref.ar2 and ref.r1 == self.row
-                    and sh is self.sheet):
+            if ref.r1 == ref.r2 and not ref.ar1 and not ref.ar2 and ref.r1 == self.row and sh is self.sheet:
                 return A(None, inline=[[self.col_expr(sh, c, "t") for c in cols]])
 
             def bound(rv, absolute):
@@ -497,11 +523,16 @@ class Compiler:
             where = [f"{alias}.__rid >= {lo}"]
             if hi is not None:
                 where.append(f"{alias}.__rid <= {hi}")
-            base = Base(f'"{sh.table}" AS {alias}', alias, where, f"{alias}.__rid",
-                        ("rel", sh.id, lo, hi, alias))
+            base = Base(
+                f'"{sh.table}" AS {alias}', alias, where, f"{alias}.__rid", ("rel", sh.id, lo, hi, alias)
+            )
             header = None
-            return A(base, [self.col_expr(sh, c, alias) for c in cols], header=header,
-                     src=Src(sh, cols, lo, hi, False, c1))
+            return A(
+                base,
+                [self.col_expr(sh, c, alias) for c in cols],
+                header=header,
+                src=Src(sh, cols, lo, hi, False, c1),
+            )
 
         rid1 = max(r1, 1) - 1
         rid2 = None if r2 is None else r2 - 1
@@ -545,8 +576,14 @@ class Compiler:
             for j in range(width):
                 v = r[j] if j < len(r) else lit_sql(None)
                 t = typs[j]
-                conv = {NUM: num_nullable, STR: txt, BOOL: lambda x: x.sql, DATE: as_date,
-                        TS: as_ts, NULL: lambda x: x.sql}[t]
+                conv = {
+                    NUM: num_nullable,
+                    STR: txt,
+                    BOOL: lambda x: x.sql,
+                    DATE: as_date,
+                    TS: as_ts,
+                    NULL: lambda x: x.sql,
+                }[t]
                 cells.append("NULL" if v.typ == NULL else (v.sql if v.typ == t else conv(v)))
             rows_sql.append(f"({', '.join(cells)}, {i})")
         names = ", ".join([f"v{j}" for j in range(width)] + ["__o"])
@@ -562,8 +599,10 @@ class Compiler:
         alias = self.alias("p")
         where = " AND ".join(b.where) or "TRUE"
         sel = ", ".join(f"{c.sql} AS v{j}" for j, c in enumerate(a.cols))
-        frm = (f"(SELECT {sel}{', ' if sel else ''}row_number() OVER (ORDER BY {b.order}) AS __p "
-               f"FROM {b.frm} WHERE {where}) AS {alias}")
+        frm = (
+            f"(SELECT {sel}{', ' if sel else ''}row_number() OVER (ORDER BY {b.order}) AS __p "
+            f"FROM {b.frm} WHERE {where}) AS {alias}"
+        )
         return frm, alias, [S(f"{alias}.v{j}", c.typ) for j, c in enumerate(a.cols)]
 
     def align(self, arrays: list[A]) -> tuple[Base | None, list[A]]:
@@ -696,9 +735,11 @@ class Compiler:
         if src.sheet is not self.sheet or len(a.cols) != 1:
             return None
         lo, hi = src.rid1, src.rid2
+
         def rel_off(expr):
             m = re.match(r"^\(t\.__rid \+ \((-?\d+)\)\)$", str(expr))
             return int(m.group(1)) if m else None
+
         frames = []
         cond = []
         lo_off = rel_off(lo)
@@ -738,8 +779,7 @@ class Compiler:
                     parts.append(str(1 - nonblank if blank else nonblank))
             for frm, exprs, _ in self.values_of(a):
                 for e in exprs:
-                    test = (f"({e.sql} IS NULL OR {txt(e)} = '')" if e.typ == STR
-                            else f"({e.sql} IS NULL)")
+                    test = f"({e.sql} IS NULL OR {txt(e)} = '')" if e.typ == STR else f"({e.sql} IS NULL)"
                     if not blank:
                         test = f"(NOT {test})"
                     if frm is None:
@@ -868,8 +908,11 @@ class Compiler:
         self._args(args, 2, 3, "IF")
         c = self.comp(args[0])
         a = self.comp(args[1]) if not isinstance(args[1], P.Blank) else lit_sql(0)
-        b = self.comp(args[2]) if len(args) > 2 and not isinstance(args[2], P.Blank) else (
-            lit_sql(False) if len(args) < 3 else lit_sql(0))
+        b = (
+            self.comp(args[2])
+            if len(args) > 2 and not isinstance(args[2], P.Blank)
+            else (lit_sql(False) if len(args) < 3 else lit_sql(0))
+        )
 
         def f(c, a, b):
             t, (sa, sb) = unify([blankish(a), blankish(b)])
@@ -900,8 +943,10 @@ class Compiler:
             pairs = list(zip(rest[0::2], rest[1::2], strict=False))
             default = rest[-1] if len(rest) % 2 else lit_sql(None)
             t, sqls = unify([blankish(v) for _, v in pairs] + [blankish(default)])
-            whens = " ".join(f"WHEN coalesce({eq_sql(expr, k)}, FALSE) THEN {s}"
-                             for (k, _), s in zip(pairs, sqls, strict=False))
+            whens = " ".join(
+                f"WHEN coalesce({eq_sql(expr, k)}, FALSE) THEN {s}"
+                for (k, _), s in zip(pairs, sqls, strict=False)
+            )
             return S(f"(CASE {whens} ELSE {sqls[-1]} END)", t)
 
         return self.lift(f, vals)
@@ -940,8 +985,10 @@ class Compiler:
                     if frm is None:
                         parts.append(boo(e))
                     else:
-                        parts.append(f"coalesce((SELECT {agg}({boo(e)}) {frm} AND {e.sql} IS NOT NULL), "
-                                     f"{'TRUE' if op == 'AND' else 'FALSE'})")
+                        parts.append(
+                            f"coalesce((SELECT {agg}({boo(e)}) {frm} AND {e.sql} IS NOT NULL), "
+                            f"{'TRUE' if op == 'AND' else 'FALSE'})"
+                        )
         if not parts:
             raise FormulaError("#N/A", f"{op} needs arguments")
         return S("(" + f" {op} ".join(parts) + ")", BOOL)
@@ -1039,8 +1086,11 @@ class Compiler:
                 selects.append(f"SELECT {n} AS v {frm}" if frm else f"SELECT {n} AS v")
         union = " UNION ALL ".join(selects)
         order = "DESC" if desc else "ASC"
-        return S(f"(SELECT v FROM ({union}) AS _u WHERE v IS NOT NULL ORDER BY v {order} "
-                 f"LIMIT 1 OFFSET CAST({num(k)} AS BIGINT) - 1)", NUM)
+        return S(
+            f"(SELECT v FROM ({union}) AS _u WHERE v IS NOT NULL ORDER BY v {order} "
+            f"LIMIT 1 OFFSET CAST({num(k)} AS BIGINT) - 1)",
+            NUM,
+        )
 
     def fn_LARGE(self, args):
         return self._k_stat(args, True)
@@ -1065,8 +1115,11 @@ class Compiler:
         a, b = self.comp(args[0]), self.comp(args[1])
         base, (x, y) = self.align([a, b])
         where = " AND ".join(base.where) or "TRUE"
-        return S(f"(SELECT corr({num_nullable(x.cols[0])}, {num_nullable(y.cols[0])}) "
-                 f"FROM {base.frm} WHERE {where})", NUM)
+        return S(
+            f"(SELECT corr({num_nullable(x.cols[0])}, {num_nullable(y.cols[0])}) "
+            f"FROM {base.frm} WHERE {where})",
+            NUM,
+        )
 
     def fn_SUMPRODUCT(self, args):
         vals = [self.comp(a) for a in args]
@@ -1082,8 +1135,7 @@ class Compiler:
         terms = []
         for c in range(aligned[0].ncols):
             terms.append(" * ".join(num(a.cols[c if a.ncols > 1 else 0]) for a in aligned))
-        return S(f"coalesce((SELECT sum({' + '.join(terms)}) FROM {base.frm} WHERE {where}), 0)",
-                 NUM)
+        return S(f"coalesce((SELECT sum({' + '.join(terms)}) FROM {base.frm} WHERE {where}), 0)", NUM)
 
     def fn_COUNTIF(self, args):
         self._args(args, 2, 2, "COUNTIF")
@@ -1141,14 +1193,16 @@ class Compiler:
                         parts.append(txt0(e))
                     else:
                         b = v.base
-                        parts.append(f"coalesce((SELECT string_agg({txt(e)}, '' ORDER BY {b.order}) "
-                                     f"{frm}), '')")
+                        parts.append(
+                            f"coalesce((SELECT string_agg({txt(e)}, '' ORDER BY {b.order}) {frm}), '')"
+                        )
         return S("(" + (" || ".join(parts) or "''") + ")", STR)
 
     def fn_CONCAT(self, args):
         self._args(args, 2, 2, "CONCAT")
-        return self.lift(lambda a, b: S(f"({txt0(a)} || {txt0(b)})", STR),
-                         [self.comp(args[0]), self.comp(args[1])])
+        return self.lift(
+            lambda a, b: S(f"({txt0(a)} || {txt0(b)})", STR), [self.comp(args[0]), self.comp(args[1])]
+        )
 
     def fn_TEXTJOIN(self, args):
         self._args(args, 3, None, "TEXTJOIN")
@@ -1166,12 +1220,16 @@ class Compiler:
                     else:
                         selects.append(f"SELECT {txt(e)} AS v, {k} AS g, {v.base.order} AS o {frm}")
         union = " UNION ALL ".join(selects)
-        return S(f"(SELECT string_agg(v, {txt0(delim)} ORDER BY g, o) FROM ({union}) AS _u "
-                 f"WHERE NOT ({boo(ignore)} AND coalesce(v, '') = ''))", STR)
+        return S(
+            f"(SELECT string_agg(v, {txt0(delim)} ORDER BY g, o) FROM ({union}) AS _u "
+            f"WHERE NOT ({boo(ignore)} AND coalesce(v, '') = ''))",
+            STR,
+        )
 
     def fn_JOIN(self, args):
         self._args(args, 2, None, "JOIN")
         from .parser import Bool as PBool
+
         return self.fn_TEXTJOIN((args[0], PBool(False), *args[1:]))
 
     # -- lookups ------------------------------------------------------------
@@ -1281,8 +1339,9 @@ class Compiler:
     def _match(self, rng: A, key: S, mtype: int) -> S:
         if rng.inline is not None:
             cells = [x for row in rng.inline for x in row]
-            whens = " ".join(f"WHEN coalesce({eq_sql(c, key)}, FALSE) THEN {i + 1}"
-                             for i, c in enumerate(cells))
+            whens = " ".join(
+                f"WHEN coalesce({eq_sql(c, key)}, FALSE) THEN {i + 1}" for i, c in enumerate(cells)
+            )
             return S(f"(CASE {whens} END)", NUM)
         col = rng.cols[0]
         b = rng.base
@@ -1351,8 +1410,11 @@ class Compiler:
                 return row[col_sel[0]]
             return A(None, inline=[[row[c] for c in col_sel]])
         if rv is None or (isinstance(rv, S) and rv.is_lit and rv.lit == 0):
-            return A(rng.base, [rng.cols[c] for c in col_sel],
-                     header=[rng.header[c] for c in col_sel] if rng.header else None)
+            return A(
+                rng.base,
+                [rng.cols[c] for c in col_sel],
+                header=[rng.header[c] for c in col_sel] if rng.header else None,
+            )
         h = 1 if rng.header is not None else 0
 
         def pick(r: S) -> S:
@@ -1365,19 +1427,23 @@ class Compiler:
             if src is not None and b.key == (src.sheet.id, src.rid1, src.rid2):
                 x = self.alias("x")
                 colx = self.col_expr(src.sheet, src.cols[c], x)
-                return S(f'(SELECT {colx.sql} FROM "{src.sheet.table}" AS {x} WHERE {x}.__rid = '
-                         f"{src.rid1} + CAST({num(r)} AS BIGINT) - 1 - {h})", colx.typ)
+                return S(
+                    f'(SELECT {colx.sql} FROM "{src.sheet.table}" AS {x} WHERE {x}.__rid = '
+                    f"{src.rid1} + CAST({num(r)} AS BIGINT) - 1 - {h})",
+                    colx.typ,
+                )
             frm, alias, cols = self.numbered(rng)
-            return S(f"(SELECT {cols[c].sql} FROM {frm} WHERE {alias}.__p = "
-                     f"CAST({num(r)} AS BIGINT) - {h})", cols[c].typ)
+            return S(
+                f"(SELECT {cols[c].sql} FROM {frm} WHERE {alias}.__p = CAST({num(r)} AS BIGINT) - {h})",
+                cols[c].typ,
+            )
 
         if len(col_sel) > 1:
             if not isinstance(rv, S):
                 raise FormulaError("#VALUE!", "INDEX row must be a single value")
             outs = []
             for c in col_sel:
-                sub = A(rng.base, [rng.cols[c]], header=[rng.header[c]] if rng.header else None,
-                        src=rng.src)
+                sub = A(rng.base, [rng.cols[c]], header=[rng.header[c]] if rng.header else None, src=rng.src)
                 outs.append(self._index_one(sub, rv, h, [0]))
             return A(None, inline=[outs])
         return self.lift(pick, [rv])
@@ -1385,8 +1451,10 @@ class Compiler:
     def _index_one(self, rng, r, h, col_sel):
         frm, alias, cols = self.numbered(rng)
         c = col_sel[0]
-        return S(f"(SELECT {cols[c].sql} FROM {frm} WHERE {alias}.__p = CAST({num(r)} AS BIGINT) - {h})",
-                 cols[c].typ)
+        return S(
+            f"(SELECT {cols[c].sql} FROM {frm} WHERE {alias}.__p = CAST({num(r)} AS BIGINT) - {h})",
+            cols[c].typ,
+        )
 
     def fn_CHOOSE(self, args):
         self._args(args, 2, None, "CHOOSE")
@@ -1465,8 +1533,10 @@ class Compiler:
         alias = self.alias("s")
         where = " AND ".join(base.where) or "TRUE"
         sel = ", ".join(f"{c.sql} AS v{j}" for j, c in enumerate(d.cols))
-        frm = (f"(SELECT {sel}, row_number() OVER (ORDER BY {', '.join(order)}) AS __o "
-               f"FROM {base.frm} WHERE {where}) AS {alias}")
+        frm = (
+            f"(SELECT {sel}, row_number() OVER (ORDER BY {', '.join(order)}) AS __o "
+            f"FROM {base.frm} WHERE {where}) AS {alias}"
+        )
         nb = Base(frm, alias, [], f"{alias}.__o", ("sort", alias))
         return A(nb, [S(f"{alias}.v{j}", c.typ) for j, c in enumerate(d.cols)])
 
@@ -1479,8 +1549,10 @@ class Compiler:
         sel = ", ".join(f"{c.sql} AS v{j}" for j, c in enumerate(data.cols))
         grp = ", ".join(f"v{j}" for j in range(data.ncols))
         nonblank = " OR ".join(f"v{j} IS NOT NULL" for j in range(data.ncols))
-        frm = (f"(SELECT {grp}, min(__o) AS __o FROM (SELECT {sel}, {b.order} AS __o FROM {b.frm} "
-               f"WHERE {where}) AS _q WHERE {nonblank} GROUP BY {grp}) AS {alias}")
+        frm = (
+            f"(SELECT {grp}, min(__o) AS __o FROM (SELECT {sel}, {b.order} AS __o FROM {b.frm} "
+            f"WHERE {where}) AS _q WHERE {nonblank} GROUP BY {grp}) AS {alias}"
+        )
         nb = Base(frm, alias, [], f"{alias}.__o", ("unique", alias))
         return A(nb, [S(f"{alias}.v{j}", c.typ) for j, c in enumerate(data.cols)])
 
@@ -1527,8 +1599,10 @@ class Compiler:
                 k += 1
                 selects.append(f"SELECT {txt(c)} AS v0, {b.order} AS o, {j} AS j FROM {b.frm} WHERE {where}")
         alias = self.alias("f")
-        frm = (f"(SELECT v0, row_number() OVER (ORDER BY o, j) AS __o FROM "
-               f"({' UNION ALL '.join(selects)}) AS _f) AS {alias}")
+        frm = (
+            f"(SELECT v0, row_number() OVER (ORDER BY o, j) AS __o FROM "
+            f"({' UNION ALL '.join(selects)}) AS _f) AS {alias}"
+        )
         nb = Base(frm, alias, [], f"{alias}.__o", ("flat", alias))
         return A(nb, [S(f"{alias}.v0", STR)])
 
@@ -1559,8 +1633,13 @@ class Compiler:
             return v
         rows = self.materialize_inline(v)
         width = max(len(r) for r in rows) if rows else 0
-        return A(None, inline=[[rows[i][j] if j < len(rows[i]) else lit_sql(None)
-                                for i in range(len(rows))] for j in range(width)])
+        return A(
+            None,
+            inline=[
+                [rows[i][j] if j < len(rows[i]) else lit_sql(None) for i in range(len(rows))]
+                for j in range(width)
+            ],
+        )
 
     def fn_SPLIT(self, args):
         self._args(args, 2, 4, "SPLIT")
@@ -1656,9 +1735,10 @@ class Compiler:
 
     def fn_ISBLANK(self, args):
         self._args(args, 1, 1, "ISBLANK")
-        return self.lift(lambda a: S(f"({a.sql} IS NULL)" if a.typ != STR else
-                                     f"({a.sql} IS NULL OR {a.sql} = '')", BOOL),
-                         [self.comp(args[0])])
+        return self.lift(
+            lambda a: S(f"({a.sql} IS NULL)" if a.typ != STR else f"({a.sql} IS NULL OR {a.sql} = '')", BOOL),
+            [self.comp(args[0])],
+        )
 
     def fn_ISERROR(self, args):
         return self.lift(lambda a: S(f"({a.sql} IS NULL)", BOOL), [self.comp(args[0])])
@@ -1749,11 +1829,23 @@ def arith(op: str, a: S, b: S) -> S:
 def text_format(x: S, fmt: str) -> S:
     f = fmt
     lower = f.lower()
-    if any(tok in lower for tok in ("yy", "dd", "hh", "ss")) or re.search(r"m{3,}", lower) or (
-        "m" in lower and ("d" in lower or "y" in lower)
+    if (
+        any(tok in lower for tok in ("yy", "dd", "hh", "ss"))
+        or re.search(r"m{3,}", lower)
+        or ("m" in lower and ("d" in lower or "y" in lower))
     ):
-        mapping = [("yyyy", "%Y"), ("yy", "%y"), ("mmmm", "%B"), ("mmm", "%b"), ("dddd", "%A"),
-                   ("ddd", "%a"), ("dd", "%d"), ("hh", "%H"), ("ss", "%S"), ("am/pm", "%p")]
+        mapping = [
+            ("yyyy", "%Y"),
+            ("yy", "%y"),
+            ("mmmm", "%B"),
+            ("mmm", "%b"),
+            ("dddd", "%A"),
+            ("ddd", "%a"),
+            ("dd", "%d"),
+            ("hh", "%H"),
+            ("ss", "%S"),
+            ("am/pm", "%p"),
+        ]
         out = ""
         i = 0
         while i < len(f):
@@ -1797,6 +1889,7 @@ def text_format(x: S, fmt: str) -> S:
 
 # ---------------------------------------------------------------- scalar lib
 
+
 def _n(fn):
     return lambda *a: S(fn(*[num(x) for x in a]), NUM)
 
@@ -1806,8 +1899,10 @@ def _t(fn, typ=STR):
 
 
 def _proper(x: S) -> str:
-    return (f"array_to_string(list_transform(string_split(lower({txt(x)}), ' '), "
-            f"lambda w: upper(w[1]) || w[2:]), ' ')")
+    return (
+        f"array_to_string(list_transform(string_split(lower({txt(x)}), ' '), "
+        f"lambda w: upper(w[1]) || w[2:]), ' ')"
+    )
 
 
 def _mid(s, start, n):
@@ -1826,10 +1921,12 @@ def _substitute(s, old, new, inst=None):
     if inst is None:
         return f"replace({txt(s)}, {txt(old)}, {txt0(new)})"
     # replace only the n-th occurrence
-    return (f"(CASE WHEN CAST({num(inst)} AS BIGINT) < 1 THEN {txt(s)} ELSE "
-            f"array_to_string(list_transform(generate_series(1, len(string_split({txt(s)}, {txt(old)}))), "
-            f"lambda i: (string_split({txt(s)}, {txt(old)}))[i] || CASE WHEN i = len(string_split({txt(s)}, {txt(old)})) "
-            f"THEN '' WHEN i = CAST({num(inst)} AS BIGINT) THEN {txt0(new)} ELSE {txt(old)} END), '') END)")
+    return (
+        f"(CASE WHEN CAST({num(inst)} AS BIGINT) < 1 THEN {txt(s)} ELSE "
+        f"array_to_string(list_transform(generate_series(1, len(string_split({txt(s)}, {txt(old)}))), "
+        f"lambda i: (string_split({txt(s)}, {txt(old)}))[i] || CASE WHEN i = len(string_split({txt(s)}, {txt(old)})) "
+        f"THEN '' WHEN i = CAST({num(inst)} AS BIGINT) THEN {txt0(new)} ELSE {txt(old)} END), '') END)"
+    )
 
 
 def _find(needle, hay, start=None, ci=False):
@@ -1853,23 +1950,28 @@ def _round(x, d=None, mode="round"):
 
 
 def _date(y, m, d):
-    return (f"(make_date(CAST({num(y)} AS BIGINT), 1, 1) + to_months(CAST({num(m)} AS INTEGER) - 1) "
-            f"+ to_days(CAST({num(d)} AS INTEGER) - 1))::DATE")
+    return (
+        f"(make_date(CAST({num(y)} AS BIGINT), 1, 1) + to_months(CAST({num(m)} AS INTEGER) - 1) "
+        f"+ to_days(CAST({num(d)} AS INTEGER) - 1))::DATE"
+    )
 
 
 def _datedif(a, b, unit):
     u = txt(unit)
-    return (f"(CASE upper({u}) WHEN 'D' THEN date_diff('day', {as_date(a)}, {as_date(b)}) "
-            f"WHEN 'M' THEN date_diff('month', {as_date(a)}, {as_date(b)}) - CASE WHEN day({as_date(b)}) < day({as_date(a)}) THEN 1 ELSE 0 END "
-            f"WHEN 'Y' THEN floor((date_diff('month', {as_date(a)}, {as_date(b)}) - CASE WHEN day({as_date(b)}) < day({as_date(a)}) THEN 1 ELSE 0 END) / 12) "
-            f"ELSE date_diff('day', {as_date(a)}, {as_date(b)}) END)")
+    return (
+        f"(CASE upper({u}) WHEN 'D' THEN date_diff('day', {as_date(a)}, {as_date(b)}) "
+        f"WHEN 'M' THEN date_diff('month', {as_date(a)}, {as_date(b)}) - CASE WHEN day({as_date(b)}) < day({as_date(a)}) THEN 1 ELSE 0 END "
+        f"WHEN 'Y' THEN floor((date_diff('month', {as_date(a)}, {as_date(b)}) - CASE WHEN day({as_date(b)}) < day({as_date(a)}) THEN 1 ELSE 0 END) / 12) "
+        f"ELSE date_diff('day', {as_date(a)}, {as_date(b)}) END)"
+    )
 
 
 def _weekday(d, t=None):
     tt = f"CAST({num(t)} AS INTEGER)" if t is not None else "1"
     dow = f"dayofweek({as_date(d)})"  # 0 = Sunday
-    return (f"(CASE {tt} WHEN 2 THEN ((({dow}) + 6) % 7) + 1 WHEN 3 THEN (({dow}) + 6) % 7 "
-            f"ELSE ({dow}) + 1 END)")
+    return (
+        f"(CASE {tt} WHEN 2 THEN ((({dow}) + 6) % 7) + 1 WHEN 3 THEN (({dow}) + 6) % 7 ELSE ({dow}) + 1 END)"
+    )
 
 
 def _value(x):
@@ -1877,8 +1979,10 @@ def _value(x):
         return x.sql
     if x.typ in (DATE, TS):
         return num(x)
-    return (f"coalesce(TRY_CAST(replace(replace(trim({txt(x)}), ',', ''), '$', '') AS DOUBLE), "
-            f"CASE WHEN trim({txt(x)}) LIKE '%\\%' ESCAPE '\\' THEN TRY_CAST(rtrim(trim({txt(x)}), '%') AS DOUBLE) / 100 END)")
+    return (
+        f"coalesce(TRY_CAST(replace(replace(trim({txt(x)}), ',', ''), '$', '') AS DOUBLE), "
+        f"CASE WHEN trim({txt(x)}) LIKE '%\\%' ESCAPE '\\' THEN TRY_CAST(rtrim(trim({txt(x)}), '%') AS DOUBLE) / 100 END)"
+    )
 
 
 SCALAR_FUNCS: dict[str, tuple[int, int | None, Any]] = {
@@ -1895,13 +1999,28 @@ SCALAR_FUNCS: dict[str, tuple[int, int | None, Any]] = {
     "EXP": (1, 1, _n(lambda x: f"exp({x})")),
     "LN": (1, 1, _n(lambda x: f"ln(CASE WHEN {x} > 0 THEN {x} END)")),
     "LOG10": (1, 1, _n(lambda x: f"log10(CASE WHEN {x} > 0 THEN {x} END)")),
-    "LOG": (1, 2, lambda x, b=None: S(
-        f"(ln(CASE WHEN {num(x)} > 0 THEN {num(x)} END) / ln({num(b) if b is not None else 10}))", NUM)),
+    "LOG": (
+        1,
+        2,
+        lambda x, b=None: S(
+            f"(ln(CASE WHEN {num(x)} > 0 THEN {num(x)} END) / ln({num(b) if b is not None else 10}))", NUM
+        ),
+    ),
     "SIGN": (1, 1, _n(lambda x: f"sign({x})")),
-    "CEILING": (1, 2, lambda x, s=None: S(
-        f"(ceil({num(x)} / {num(s) if s is not None else 1}) * {num(s) if s is not None else 1})", NUM)),
-    "FLOOR": (1, 2, lambda x, s=None: S(
-        f"(floor({num(x)} / {num(s) if s is not None else 1}) * {num(s) if s is not None else 1})", NUM)),
+    "CEILING": (
+        1,
+        2,
+        lambda x, s=None: S(
+            f"(ceil({num(x)} / {num(s) if s is not None else 1}) * {num(s) if s is not None else 1})", NUM
+        ),
+    ),
+    "FLOOR": (
+        1,
+        2,
+        lambda x, s=None: S(
+            f"(floor({num(x)} / {num(s) if s is not None else 1}) * {num(s) if s is not None else 1})", NUM
+        ),
+    ),
     "MROUND": (2, 2, _n(lambda x, m: f"(round({x} / NULLIF({m}, 0)) * {m})")),
     "QUOTIENT": (2, 2, _n(lambda a, b: f"trunc({a} / NULLIF({b}, 0))")),
     "EVEN": (1, 1, _n(lambda x: f"(sign({x}) * ceil(abs({x}) / 2) * 2)")),
@@ -1932,9 +2051,16 @@ SCALAR_FUNCS: dict[str, tuple[int, int | None, Any]] = {
     "RIGHT": (1, 2, _t(_right)),
     "MID": (3, 3, _t(_mid)),
     "SUBSTITUTE": (3, 4, _t(_substitute)),
-    "REPLACE": (4, 4, _t(lambda s, st, n, new: (
-        f"(left({txt(s)}, CAST({num(st)} AS BIGINT) - 1) || {txt0(new)} || "
-        f"substring({txt(s)}, CAST({num(st)} AS BIGINT) + CAST({num(n)} AS BIGINT)))"))),
+    "REPLACE": (
+        4,
+        4,
+        _t(
+            lambda s, st, n, new: (
+                f"(left({txt(s)}, CAST({num(st)} AS BIGINT) - 1) || {txt0(new)} || "
+                f"substring({txt(s)}, CAST({num(st)} AS BIGINT) + CAST({num(n)} AS BIGINT)))"
+            )
+        ),
+    ),
     "REPT": (2, 2, _t(lambda s, n: f"repeat({txt0(s)}, CAST({num(n)} AS BIGINT))")),
     "FIND": (2, 3, lambda n, h, s=None: S(f"CAST({_find(n, h, s)} AS DOUBLE)", NUM)),
     "SEARCH": (2, 3, lambda n, h, s=None: S(f"CAST({_find(n, h, s, ci=True)} AS DOUBLE)", NUM)),
@@ -1944,19 +2070,39 @@ SCALAR_FUNCS: dict[str, tuple[int, int | None, Any]] = {
     "UNICODE": (1, 1, lambda x: S(f"CAST(unicode({txt(x)}) AS DOUBLE)", NUM)),
     "T": (1, 1, lambda x: S(x.sql if x.typ == STR else "''", STR)),
     "REGEXMATCH": (2, 2, lambda s, p: S(f"regexp_matches({txt0(s)}, {txt(p)})", BOOL)),
-    "REGEXEXTRACT": (2, 2, _t(lambda s, p: (
-        f"(CASE WHEN regexp_matches({txt0(s)}, {txt(p)}) THEN "
-        f"regexp_extract({txt0(s)}, {txt(p)}, CASE WHEN regexp_matches({txt(p)}, '\\(([^?]|$)') THEN 1 ELSE 0 END) END)"))),
-    "REGEXREPLACE": (3, 3, _t(lambda s, p, r: (
-        f"regexp_replace({txt0(s)}, {txt(p)}, regexp_replace({txt0(r)}, '\\$(\\d)', '\\\\\\1', 'g'), 'g')"))),
-    "FIXED": (1, 3, _t(lambda x, d=None, nc=None: (
-        f"format('{{:,.{{}}f}}', {num(x)}, CAST({num(d) if d is not None else 2} AS INTEGER))"))),
+    "REGEXEXTRACT": (
+        2,
+        2,
+        _t(
+            lambda s, p: (
+                f"(CASE WHEN regexp_matches({txt0(s)}, {txt(p)}) THEN "
+                f"regexp_extract({txt0(s)}, {txt(p)}, CASE WHEN regexp_matches({txt(p)}, '\\(([^?]|$)') THEN 1 ELSE 0 END) END)"
+            )
+        ),
+    ),
+    "REGEXREPLACE": (
+        3,
+        3,
+        _t(
+            lambda s, p, r: (
+                f"regexp_replace({txt0(s)}, {txt(p)}, regexp_replace({txt0(r)}, '\\$(\\d)', '\\\\\\1', 'g'), 'g')"
+            )
+        ),
+    ),
+    "FIXED": (
+        1,
+        3,
+        _t(
+            lambda x, d=None, nc=None: (
+                f"format('{{:,.{{}}f}}', {num(x)}, CAST({num(d) if d is not None else 2} AS INTEGER))"
+            )
+        ),
+    ),
     "DOLLAR": (1, 2, _t(lambda x, d=None: f"'$' || format('{{:,.2f}}', {num(x)})")),
     # dates
     "DATE": (3, 3, lambda y, m, d: S(_date(y, m, d), DATE)),
     "DATEVALUE": (1, 1, lambda x: S(as_date(x), DATE)),
-    "TIMEVALUE": (1, 1, lambda x: S(
-        f"(epoch(TRY_CAST({txt(x)} AS TIME)) / 86400.0)", NUM)),
+    "TIMEVALUE": (1, 1, lambda x: S(f"(epoch(TRY_CAST({txt(x)} AS TIME)) / 86400.0)", NUM)),
     "YEAR": (1, 1, lambda x: S(f"CAST(year({as_date(x)}) AS DOUBLE)", NUM)),
     "MONTH": (1, 1, lambda x: S(f"CAST(month({as_date(x)}) AS DOUBLE)", NUM)),
     "DAY": (1, 1, lambda x: S(f"CAST(day({as_date(x)}) AS DOUBLE)", NUM)),
@@ -1966,25 +2112,53 @@ SCALAR_FUNCS: dict[str, tuple[int, int | None, Any]] = {
     "WEEKDAY": (1, 2, lambda d, t=None: S(f"CAST({_weekday(d, t)} AS DOUBLE)", NUM)),
     "WEEKNUM": (1, 2, lambda d, t=None: S(f"CAST(strftime({as_date(d)}, '%U') AS DOUBLE) + 1", NUM)),
     "ISOWEEKNUM": (1, 1, lambda d: S(f"CAST(weekofyear({as_date(d)}) AS DOUBLE)", NUM)),
-    "EDATE": (2, 2, lambda d, m: S(f"CAST({as_date(d)} + to_months(CAST({num(m)} AS INTEGER)) AS DATE)", DATE)),
-    "EOMONTH": (2, 2, lambda d, m: S(
-        f"last_day(CAST({as_date(d)} + to_months(CAST({num(m)} AS INTEGER)) AS DATE))", DATE)),
+    "EDATE": (
+        2,
+        2,
+        lambda d, m: S(f"CAST({as_date(d)} + to_months(CAST({num(m)} AS INTEGER)) AS DATE)", DATE),
+    ),
+    "EOMONTH": (
+        2,
+        2,
+        lambda d, m: S(f"last_day(CAST({as_date(d)} + to_months(CAST({num(m)} AS INTEGER)) AS DATE))", DATE),
+    ),
     "DATEDIF": (3, 3, lambda a, b, u: S(f"CAST({_datedif(a, b, u)} AS DOUBLE)", NUM)),
     "DAYS": (2, 2, lambda e, s: S(f"CAST(date_diff('day', {as_date(s)}, {as_date(e)}) AS DOUBLE)", NUM)),
-    "NETWORKDAYS": (2, 2, lambda s, e: S(
-        f"CAST((SELECT count(*) FROM range({as_date(s)}::TIMESTAMP, {as_date(e)}::TIMESTAMP + INTERVAL 1 DAY, "
-        f"INTERVAL 1 DAY) AS _d(d) WHERE dayofweek(d) NOT IN (0, 6)) AS DOUBLE)", NUM)),
+    "NETWORKDAYS": (
+        2,
+        2,
+        lambda s, e: S(
+            f"CAST((SELECT count(*) FROM range({as_date(s)}::TIMESTAMP, {as_date(e)}::TIMESTAMP + INTERVAL 1 DAY, "
+            f"INTERVAL 1 DAY) AS _d(d) WHERE dayofweek(d) NOT IN (0, 6)) AS DOUBLE)",
+            NUM,
+        ),
+    ),
     "TIME": (3, 3, _n(lambda h, m, s: f"(({h}) * 3600 + ({m}) * 60 + ({s})) / 86400.0")),
     # info
-    "ISNUMBER": (1, 1, lambda x: S(
-        "TRUE" if x.typ == NUM and x.is_lit else (f"({x.sql} IS NOT NULL)" if x.typ == NUM else "FALSE"), BOOL)),
+    "ISNUMBER": (
+        1,
+        1,
+        lambda x: S(
+            "TRUE" if x.typ == NUM and x.is_lit else (f"({x.sql} IS NOT NULL)" if x.typ == NUM else "FALSE"),
+            BOOL,
+        ),
+    ),
     "ISTEXT": (1, 1, lambda x: S(f"({x.sql} IS NOT NULL)" if x.typ == STR else "FALSE", BOOL)),
     "ISLOGICAL": (1, 1, lambda x: S(f"({x.sql} IS NOT NULL)" if x.typ == BOOL else "FALSE", BOOL)),
     "ISDATE": (1, 1, lambda x: S(f"({x.sql} IS NOT NULL)" if x.typ in (DATE, TS) else "FALSE", BOOL)),
-    "ISEMAIL": (1, 1, lambda x: S(
-        f"coalesce(regexp_matches({txt(x)}, '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$'), FALSE)", BOOL)),
-    "ISURL": (1, 1, lambda x: S(
-        f"coalesce(regexp_matches({txt(x)}, '^(https?://)?[\\w.-]+\\.[a-z]{{2,}}(/\\S*)?$', 'i'), FALSE)", BOOL)),
+    "ISEMAIL": (
+        1,
+        1,
+        lambda x: S(f"coalesce(regexp_matches({txt(x)}, '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$'), FALSE)", BOOL),
+    ),
+    "ISURL": (
+        1,
+        1,
+        lambda x: S(
+            f"coalesce(regexp_matches({txt(x)}, '^(https?://)?[\\w.-]+\\.[a-z]{{2,}}(/\\S*)?$', 'i'), FALSE)",
+            BOOL,
+        ),
+    ),
     "ISEVEN": (1, 1, lambda x: S(f"(CAST(trunc({num(x)}) AS BIGINT) % 2 = 0)", BOOL)),
     "ISODD": (1, 1, lambda x: S(f"(CAST(trunc({num(x)}) AS BIGINT) % 2 <> 0)", BOOL)),
 }
@@ -1994,6 +2168,5 @@ VOLATILE = {"RAND", "RANDBETWEEN", "NOW", "TODAY"}
 _DOTTED = {"STDEV_S", "STDEV_P", "VAR_S", "VAR_P", "MODE_SNGL", "PERCENTILE_INC"}
 ALL_FUNCTIONS = sorted(
     set(SCALAR_FUNCS)
-    | {(n[3:].replace("_", ".") if n[3:] in _DOTTED else n[3:])
-       for n in dir(Compiler) if n.startswith("fn_")}
+    | {(n[3:].replace("_", ".") if n[3:] in _DOTTED else n[3:]) for n in dir(Compiler) if n.startswith("fn_")}
 )

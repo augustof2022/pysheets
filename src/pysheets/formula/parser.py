@@ -175,10 +175,17 @@ def ref_from_token(tok: Token) -> Ref:
 # ---------------------------------------------------------------------- parser
 
 _BINARY_PREC = {
-    "=": 1, "<>": 1, "<": 1, ">": 1, "<=": 1, ">=": 1,
+    "=": 1,
+    "<>": 1,
+    "<": 1,
+    ">": 1,
+    "<=": 1,
+    ">=": 1,
     "&": 2,
-    "+": 3, "-": 3,
-    "*": 4, "/": 4,
+    "+": 3,
+    "-": 3,
+    "*": 4,
+    "/": 4,
     "^": 5,
 }
 _UNARY_PREC = 6
@@ -320,7 +327,7 @@ def transform_refs(text: str, fn: Callable[[Ref], Ref | None]) -> str:
     Whitespace and everything else are preserved verbatim.
     """
     lead = "=" if text.startswith("=") else ""
-    src = text[len(lead):]
+    src = text[len(lead) :]
     try:
         toks = tokenize(src)
     except FormulaSyntaxError:
@@ -330,7 +337,7 @@ def transform_refs(text: str, fn: Callable[[Ref], Ref | None]) -> str:
     for tok in toks:
         if tok.kind != "REF":
             continue
-        out.append(src[pos:tok.start])
+        out.append(src[pos : tok.start])
         new = fn(ref_from_token(tok))
         out.append("#REF!" if new is None else new.to_a1())
         pos = tok.end

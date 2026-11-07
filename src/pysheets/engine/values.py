@@ -8,14 +8,47 @@ import math
 import re
 import uuid
 
-_NUM_RE = re.compile(r"^\s*([-+]?)\s*(\$|€|£|¥)?\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?|\.\d+)([eE][-+]?\d+)?\s*(%?)\s*$")
-_DATE_FORMATS = ["%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d", "%d-%b-%Y", "%d %b %Y", "%b %d %Y",
-                 "%b %d, %Y", "%B %d, %Y", "%d %B %Y"]
-_TS_FORMATS = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M",
-               "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M"]
+_NUM_RE = re.compile(
+    r"^\s*([-+]?)\s*(\$|€|£|¥)?\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?|\.\d+)([eE][-+]?\d+)?\s*(%?)\s*$"
+)
+_DATE_FORMATS = [
+    "%Y-%m-%d",
+    "%m/%d/%Y",
+    "%m/%d/%y",
+    "%Y/%m/%d",
+    "%d-%b-%Y",
+    "%d %b %Y",
+    "%b %d %Y",
+    "%b %d, %Y",
+    "%B %d, %Y",
+    "%d %B %Y",
+]
+_TS_FORMATS = [
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M",
+    "%m/%d/%Y %H:%M:%S",
+    "%m/%d/%Y %H:%M",
+]
 
-NUMERIC_DUCK = ("BIGINT", "INTEGER", "DOUBLE", "FLOAT", "HUGEINT", "SMALLINT", "TINYINT", "UBIGINT",
-                "UINTEGER", "USMALLINT", "UTINYINT", "REAL", "DECIMAL", "UHUGEINT", "NUMERIC")
+NUMERIC_DUCK = (
+    "BIGINT",
+    "INTEGER",
+    "DOUBLE",
+    "FLOAT",
+    "HUGEINT",
+    "SMALLINT",
+    "TINYINT",
+    "UBIGINT",
+    "UINTEGER",
+    "USMALLINT",
+    "UTINYINT",
+    "REAL",
+    "DECIMAL",
+    "UHUGEINT",
+    "NUMERIC",
+)
 
 
 def is_numeric_duck(t: str) -> bool:

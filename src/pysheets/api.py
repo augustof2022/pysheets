@@ -47,12 +47,19 @@ def dispatch(wb: Workbook, method: str, params: dict, ctx: dict | None = None) -
         except (EngineError, FormulaError, FormulaSyntaxError, ValueError, KeyError, IndexError) as e:
             _rollback(wb)
             msg = e.args[0] if isinstance(e, KeyError) and e.args else str(e)
-            return {"ok": False, "error": str(msg).split("\n")[0][:500], "info": wb.info() if mutates else None}
+            return {
+                "ok": False,
+                "error": str(msg).split("\n")[0][:500],
+                "info": wb.info() if mutates else None,
+            }
         except Exception as e:  # pragma: no cover - unexpected engine failures
             log.error("RPC %s failed: %s\n%s", method, e, traceback.format_exc())
             _rollback(wb)
-            return {"ok": False, "error": f"{type(e).__name__}: {str(e).splitlines()[0][:400] if str(e) else ''}",
-                    "info": wb.info() if mutates else None}
+            return {
+                "ok": False,
+                "error": f"{type(e).__name__}: {str(e).splitlines()[0][:400] if str(e) else ''}",
+                "info": wb.info() if mutates else None,
+            }
 
 
 def _rollback(wb: Workbook):
@@ -299,15 +306,32 @@ def _dv_options(wb, p):
 
 @rpc("find", mutates=False)
 def _find(wb, p):
-    return F.find(wb, p["sheet"], p["query"], p.get("match_case", False), p.get("whole", False),
-                  p.get("regex", False), p.get("row", 0), p.get("col", -1), p.get("backwards", False),
-                  p.get("all_sheets", False))
+    return F.find(
+        wb,
+        p["sheet"],
+        p["query"],
+        p.get("match_case", False),
+        p.get("whole", False),
+        p.get("regex", False),
+        p.get("row", 0),
+        p.get("col", -1),
+        p.get("backwards", False),
+        p.get("all_sheets", False),
+    )
 
 
 @rpc("replace_all")
 def _replace_all(wb, p):
-    return F.replace_all(wb, p["sheet"], p["query"], p.get("replacement", ""), p.get("match_case", False),
-                         p.get("whole", False), p.get("regex", False), p.get("all_sheets", False))
+    return F.replace_all(
+        wb,
+        p["sheet"],
+        p["query"],
+        p.get("replacement", ""),
+        p.get("match_case", False),
+        p.get("whole", False),
+        p.get("regex", False),
+        p.get("all_sheets", False),
+    )
 
 
 @rpc("stats", mutates=False)
@@ -317,8 +341,9 @@ def _stats(wb, p):
 
 @rpc("dups")
 def _dups(wb, p):
-    return F.duplicates(wb, p["sheet"], p["cols"], p.get("action", "count"), p.get("ignore_case", True),
-                        p.get("trim", True))
+    return F.duplicates(
+        wb, p["sheet"], p["cols"], p.get("action", "count"), p.get("ignore_case", True), p.get("trim", True)
+    )
 
 
 @rpc("clean.text")
@@ -356,7 +381,9 @@ def _io_import(wb, p):
 
 @rpc("io.export", mutates=False)
 def _io_export(wb, p):
-    return IO.export(wb, p["path"], p.get("format"), p.get("scope", "sheet"), p.get("sheet"), p.get("options"))
+    return IO.export(
+        wb, p["path"], p.get("format"), p.get("scope", "sheet"), p.get("sheet"), p.get("options")
+    )
 
 
 @rpc("io.sql_tables", mutates=False)
@@ -371,7 +398,9 @@ def _io_sql_import(wb, p):
 
 @rpc("io.sql_export", mutates=False)
 def _io_sql_export(wb, p):
-    return IO.export_sql_url(wb, p["url"], p.get("scope", "sheet"), p.get("sheet"), p.get("if_exists", "replace"))
+    return IO.export_sql_url(
+        wb, p["url"], p.get("scope", "sheet"), p.get("sheet"), p.get("if_exists", "replace")
+    )
 
 
 @rpc("io.temp_path", mutates=False)
@@ -391,10 +420,21 @@ def _dialog_open(wb, p):
         return {"unsupported": True}
     import webview
 
-    types = tuple(p.get("types") or ("Spreadsheets (*.csv;*.tsv;*.txt;*.xlsx;*.xlsm;*.xls;*.parquet;*.json;*.pysheets;"
-                                     "*.sqlite;*.db;*.duckdb)", "All files (*.*)"))
-    res = win.create_file_dialog(getattr(webview, "FileDialog", webview).OPEN if hasattr(webview, "FileDialog")
-                                 else webview.OPEN_DIALOG, allow_multiple=bool(p.get("multiple")), file_types=types)
+    types = tuple(
+        p.get("types")
+        or (
+            "Spreadsheets (*.csv;*.tsv;*.txt;*.xlsx;*.xlsm;*.xls;*.parquet;*.json;*.pysheets;"
+            "*.sqlite;*.db;*.duckdb)",
+            "All files (*.*)",
+        )
+    )
+    res = win.create_file_dialog(
+        getattr(webview, "FileDialog", webview).OPEN
+        if hasattr(webview, "FileDialog")
+        else webview.OPEN_DIALOG,
+        allow_multiple=bool(p.get("multiple")),
+        file_types=types,
+    )
     return {"paths": list(res) if res else []}
 
 
@@ -407,8 +447,11 @@ def _dialog_save(wb, p):
     import webview
 
     kind = webview.FileDialog.SAVE if hasattr(webview, "FileDialog") else webview.SAVE_DIALOG
-    res = win.create_file_dialog(kind, save_filename=p.get("name") or "export.xlsx",
-                                 file_types=tuple(p.get("types") or ("All files (*.*)",)))
+    res = win.create_file_dialog(
+        kind,
+        save_filename=p.get("name") or "export.xlsx",
+        file_types=tuple(p.get("types") or ("All files (*.*)",)),
+    )
     if not res:
         return {"path": None}
     return {"path": res if isinstance(res, str) else res[0]}

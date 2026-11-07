@@ -65,7 +65,13 @@ class Progress:
         self.label = label
 
     def __enter__(self):
-        self.wb.progress = {"active": True, "label": self.label, "done": 0, "total": None, "started": time.time()}
+        self.wb.progress = {
+            "active": True,
+            "label": self.label,
+            "done": 0,
+            "total": None,
+            "started": time.time(),
+        }
         return self
 
     def update(self, done: int, total: int | None = None, label: str | None = None):
@@ -99,7 +105,9 @@ def preview(wb: Workbook, path: str, options: dict | None = None) -> dict:
             sniff = _sniff(cur, path)
         finally:
             cur.close()
-        out["tables"] = [{"name": out["name"], "columns": cols, "rows": [[to_json(v) for v in r] for r in rows]}]
+        out["tables"] = [
+            {"name": out["name"], "columns": cols, "rows": [[to_json(v) for v in r] for r in rows]}
+        ]
         out["sniff"] = sniff
     elif kind == "excel":
         from python_calamine import CalamineWorkbook
@@ -113,8 +121,14 @@ def preview(wb: Workbook, path: str, options: dict | None = None) -> dict:
                 rows.append([to_json(_cal(v)) for v in r])
                 if i >= 25:
                     break
-            tables.append({"name": name, "columns": [], "rows": rows,
-                           "dims": [getattr(sheet, "total_height", None), getattr(sheet, "total_width", None)]})
+            tables.append(
+                {
+                    "name": name,
+                    "columns": [],
+                    "rows": rows,
+                    "dims": [getattr(sheet, "total_height", None), getattr(sheet, "total_width", None)],
+                }
+            )
         out["tables"] = tables
     elif kind in ("parquet", "json"):
         fn = "read_parquet" if kind == "parquet" else "read_json_auto"
@@ -125,11 +139,19 @@ def preview(wb: Workbook, path: str, options: dict | None = None) -> dict:
             rows = res.fetchall()
             total = None
             if kind == "parquet":
-                total = cur.execute(f"SELECT sum(num_rows) FROM parquet_file_metadata({lit(path)})").fetchone()[0]
+                total = cur.execute(
+                    f"SELECT sum(num_rows) FROM parquet_file_metadata({lit(path)})"
+                ).fetchone()[0]
         finally:
             cur.close()
-        out["tables"] = [{"name": out["name"], "columns": cols, "rows": [[to_json(v) for v in r] for r in rows],
-                          "total": total}]
+        out["tables"] = [
+            {
+                "name": out["name"],
+                "columns": cols,
+                "rows": [[to_json(v) for v in r] for r in rows],
+                "total": total,
+            }
+        ]
     elif kind in ("sqlite", "duckdb"):
         out["tables"] = [{"name": t, "columns": [], "rows": []} for t in list_db_tables(path, kind)]
     elif kind == "native":
@@ -192,8 +214,12 @@ def import_file(wb: Workbook, path: str, options: dict | None = None) -> dict:
             last_err = None
             for attempt in ({}, {"all_varchar": True}, {"all_varchar": True, "lenient": True}):
                 try:
-                    sh = wb.sheet_from_sql(name, f"SELECT * FROM {_csv_relation(path, opts, **attempt)}",
-                                           header=header, source=path)
+                    sh = wb.sheet_from_sql(
+                        name,
+                        f"SELECT * FROM {_csv_relation(path, opts, **attempt)}",
+                        header=header,
+                        source=path,
+                    )
                     created.append(sh.id)
                     break
                 except duckdb.Error as e:
@@ -251,7 +277,9 @@ def _import_excel(wb: Workbook, path: str, options: dict, prog: Progress) -> lis
         else:
             names = [""] * len(first)
             rows_iter = _chain([first], ([_cal(v) for v in r] for r in it))
-        sh = _rows_to_sheet(wb, name, names, rows_iter, prog, source=f"{path}#{name}", header=bool(header_opt))
+        sh = _rows_to_sheet(
+            wb, name, names, rows_iter, prog, source=f"{path}#{name}", header=bool(header_opt)
+        )
         created.append(sh.id)
     return created
 
@@ -296,10 +324,16 @@ def _arrow_column(values: list):
     if kinds == {"date"}:
         return pa.array(values, pa.date32()), "date"
     if kinds <= {"date", "ts"}:
-        return pa.array([v if isinstance(v, dt.datetime) or v is None else dt.datetime.combine(v, dt.time())
-                         for v in values], pa.timestamp("us")), "ts"
-    return pa.array([None if v is None else (v if isinstance(v, str) else value_to_text(v)) for v in values],
-                    pa.string()), "str"
+        return pa.array(
+            [
+                v if isinstance(v, dt.datetime) or v is None else dt.datetime.combine(v, dt.time())
+                for v in values
+            ],
+            pa.timestamp("us"),
+        ), "ts"
+    return pa.array(
+        [None if v is None else (v if isinstance(v, str) else value_to_text(v)) for v in values], pa.string()
+    ), "str"
 
 
 _RANK = {"null": 0, "bool": 1, "int": 2, "float": 3, "date": 4, "ts": 5, "str": 9}
@@ -317,8 +351,16 @@ def _merge_kind(a: str, b: str) -> str:
     return "str"
 
 
-def _rows_to_sheet(wb: Workbook, name: str, names: list[str], rows: Iterator[list], prog: Progress | None,
-                   source: str | None = None, header: bool = True, chunk: int = 50_000) -> Sheet:
+def _rows_to_sheet(
+    wb: Workbook,
+    name: str,
+    names: list[str],
+    rows: Iterator[list],
+    prog: Progress | None,
+    source: str | None = None,
+    header: bool = True,
+    chunk: int = 50_000,
+) -> Sheet:
     """Stream python rows into a new sheet (used by Excel and SQL imports)."""
     import pyarrow as pa
 
@@ -354,8 +396,15 @@ def _rows_to_sheet(wb: Workbook, name: str, names: list[str], rows: Iterator[lis
     done += len(buf)
     flush()
     # unify chunk types
-    target = {"null": pa.string(), "bool": pa.bool_(), "int": pa.int64(), "float": pa.float64(),
-              "date": pa.date32(), "ts": pa.timestamp("us"), "str": pa.string()}
+    target = {
+        "null": pa.string(),
+        "bool": pa.bool_(),
+        "int": pa.int64(),
+        "float": pa.float64(),
+        "date": pa.date32(),
+        "ts": pa.timestamp("us"),
+        "str": pa.string(),
+    }
     while len(names) < width:
         names.append("")
     colnames = [f"__c{j}" for j in range(width)]
@@ -367,7 +416,9 @@ def _rows_to_sheet(wb: Workbook, name: str, names: list[str], rows: Iterator[lis
             want = target[kinds[j]]
             if arr.type != want:
                 if want == pa.string():
-                    arr = pa.array([None if v is None else value_to_text(v) for v in arr.to_pylist()], pa.string())
+                    arr = pa.array(
+                        [None if v is None else value_to_text(v) for v in arr.to_pylist()], pa.string()
+                    )
                 else:
                     arr = arr.cast(want)
             arrays.append(arr)
@@ -391,22 +442,37 @@ def list_db_tables(path: str, kind: str) -> list[str]:
     if kind == "sqlite":
         con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         try:
-            return [r[0] for r in con.execute(
-                "SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+            return [
+                r[0]
+                for r in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                )
+            ]
         finally:
             con.close()
     con = duckdb.connect(path, read_only=True)
     try:
-        return [f"{s}.{t}" if s != "main" else t for s, t in con.execute(
-            "SELECT schema_name, table_name FROM duckdb_tables() UNION ALL "
-            "SELECT schema_name, view_name FROM duckdb_views() WHERE NOT internal ORDER BY 1, 2").fetchall()
-            if not t.startswith("__")]
+        return [
+            f"{s}.{t}" if s != "main" else t
+            for s, t in con.execute(
+                "SELECT schema_name, table_name FROM duckdb_tables() UNION ALL "
+                "SELECT schema_name, view_name FROM duckdb_views() WHERE NOT internal ORDER BY 1, 2"
+            ).fetchall()
+            if not t.startswith("__")
+        ]
     finally:
         con.close()
 
 
-def import_query(wb: Workbook, path: str, kind: str, query: str | None, name: str, prog: Progress | None = None,
-                 table: str | None = None) -> str:
+def import_query(
+    wb: Workbook,
+    path: str,
+    kind: str,
+    query: str | None,
+    name: str,
+    prog: Progress | None = None,
+    table: str | None = None,
+) -> str:
     if kind == "duckdb":
         alias = "__src"
         wb.con.execute(f"ATTACH {lit(path)} AS {alias} (READ_ONLY)")
@@ -499,7 +565,8 @@ def _last_used_col(wb: Workbook, sh: Sheet) -> int:
     if not sh.columns:
         return -1
     counts = wb.con.execute(
-        f"SELECT {', '.join(f'count({q(c.id)})' for c in sh.columns)} FROM {q(sh.table)}").fetchone()
+        f"SELECT {', '.join(f'count({q(c.id)})' for c in sh.columns)} FROM {q(sh.table)}"
+    ).fetchone()
     last = -1
     for i, (c, n) in enumerate(zip(sh.columns, counts, strict=True)):
         if n or c.name:
@@ -517,8 +584,8 @@ def _last_used_row(wb: Workbook, sh: Sheet, ncols: int) -> int:
 
 def _select_for_export(wb: Workbook, sh: Sheet, visible_only: bool = False) -> tuple[str, list[str], list]:
     last = _last_used_col(wb, sh)
-    cols = sh.columns[:last + 1]
-    names = _export_names(sh)[:last + 1]
+    cols = sh.columns[: last + 1]
+    names = _export_names(sh)[: last + 1]
     nrows = _last_used_row(wb, sh, len(cols))
     if not cols:
         return "SELECT 1 WHERE FALSE", [], []
@@ -529,8 +596,14 @@ def _select_for_export(wb: Workbook, sh: Sheet, visible_only: bool = False) -> t
     return f"SELECT {sel} FROM {q(sh.table)} t WHERE {where} ORDER BY t.__rid", names, cols
 
 
-def export(wb: Workbook, path: str, fmt: str | None = None, scope: str = "sheet", sheet_id: str | None = None,
-           options: dict | None = None) -> dict:
+def export(
+    wb: Workbook,
+    path: str,
+    fmt: str | None = None,
+    scope: str = "sheet",
+    sheet_id: str | None = None,
+    options: dict | None = None,
+) -> dict:
     options = options or {}
     fmt = (fmt or os.path.splitext(path)[1].lstrip(".")).lower()
     sheets = wb.sheets if scope == "all" else [wb.sheet(sheet_id or wb.sheets[0].id)]
@@ -624,7 +697,10 @@ def _export_xlsx_rust(wb: Workbook, path: str, sheets: list[Sheet], visible: boo
                 if not batch:
                     break
                 for row in batch:
-                    yield {n_: (None if isinstance(v, float) and v != v else v) for n_, v in zip(names, row, strict=True)}
+                    yield {
+                        n_: (None if isinstance(v, float) and v != v else v)
+                        for n_, v in zip(names, row, strict=True)
+                    }
                 emitted += len(batch)
                 counter["done"] += len(batch)
                 prog.update(counter["done"], total)
@@ -643,16 +719,31 @@ def _export_xlsx_rust(wb: Workbook, path: str, sheets: list[Sheet], visible: boo
             if fm:
                 formats[nm] = fm
             freeze[nm] = {"row": max(sh.frozen_rows, 1), "col": sh.frozen_cols}
-    rx.write_worksheets(entries, path, bold_headers=True, column_widths=widths, column_formats=formats,
-                        freeze_panes=freeze, datetime_format="yyyy-mm-dd hh:mm:ss")
+    rx.write_worksheets(
+        entries,
+        path,
+        bold_headers=True,
+        column_widths=widths,
+        column_formats=formats,
+        freeze_panes=freeze,
+        datetime_format="yyyy-mm-dd hh:mm:ss",
+    )
 
 
 def _export_xlsx_py(wb: Workbook, path: str, sheets: list[Sheet], visible: bool, prog: Progress):
     import xlsxwriter
 
-    book = xlsxwriter.Workbook(path, {"constant_memory": True, "strings_to_numbers": False,
-                                      "strings_to_formulas": False, "strings_to_urls": False,
-                                      "default_date_format": "yyyy-mm-dd", "remove_timezone": True})
+    book = xlsxwriter.Workbook(
+        path,
+        {
+            "constant_memory": True,
+            "strings_to_numbers": False,
+            "strings_to_formulas": False,
+            "strings_to_urls": False,
+            "default_date_format": "yyyy-mm-dd",
+            "remove_timezone": True,
+        },
+    )
     head_fmt = book.add_format({"bold": True, "bg_color": "#F1F3F4", "border": 0})
     used_names: set[str] = set()
     total_rows = sum(s.nrows for s in sheets)
@@ -676,7 +767,9 @@ def _export_xlsx_py(wb: Workbook, path: str, sheets: list[Sheet], visible: bool,
                         break
                     if ws is None or r >= EXCEL_MAX_ROWS:
                         part += 1
-                        ws = book.add_worksheet(_xl_name(sh.name if part == 1 else f"{sh.name} ({part})", used_names))
+                        ws = book.add_worksheet(
+                            _xl_name(sh.name if part == 1 else f"{sh.name} ({part})", used_names)
+                        )
                         for j, (c, _n) in enumerate(zip(cols, names, strict=True)):
                             ws.set_column(j, j, max(6, c.width / 7.2), fmts[j])
                         if sh.columns and any(c.name for c in sh.columns):
@@ -694,8 +787,12 @@ def _export_xlsx_py(wb: Workbook, path: str, sheets: list[Sheet], visible: bool,
                             if v is None:
                                 continue
                             if isinstance(v, (dt.date, dt.datetime)):
-                                ws.write_datetime(r, j, v if isinstance(v, dt.datetime) else
-                                                  dt.datetime.combine(v, dt.time()), fmts[j])
+                                ws.write_datetime(
+                                    r,
+                                    j,
+                                    v if isinstance(v, dt.datetime) else dt.datetime.combine(v, dt.time()),
+                                    fmts[j],
+                                )
                             elif isinstance(v, bool):
                                 ws.write_boolean(r, j, v)
                             elif isinstance(v, (int, float)):
@@ -719,7 +816,7 @@ def _xl_name(name: str, used: set[str]) -> str:
     i = 2
     while n.lower() in used:
         suffix = f" ({i})"
-        n = base[:31 - len(suffix)] + suffix
+        n = base[: 31 - len(suffix)] + suffix
         i += 1
     used.add(n.lower())
     return n
@@ -751,7 +848,9 @@ def _export_sqlite(wb: Workbook, path: str, sheets: list[Sheet], visible: bool, 
             sql, names, cols = _select_for_export(wb, sh, visible)
             tname = _sql_ident(sh.name)
             con.execute(f"DROP TABLE IF EXISTS {q(tname)}")
-            defs = ", ".join(f"{q(n)} {_SQLITE_TYPES.get(c.typ, 'TEXT')}" for n, c in zip(names, cols, strict=True))
+            defs = ", ".join(
+                f"{q(n)} {_SQLITE_TYPES.get(c.typ, 'TEXT')}" for n, c in zip(names, cols, strict=True)
+            )
             con.execute(f"CREATE TABLE {q(tname)} ({defs})")
             ph = ", ".join("?" for _ in names)
             cur = wb.con.cursor()
@@ -761,8 +860,9 @@ def _export_sqlite(wb: Workbook, path: str, sheets: list[Sheet], visible: bool, 
                     batch = res.fetchmany(20000)
                     if not batch:
                         break
-                    con.executemany(f"INSERT INTO {q(tname)} VALUES ({ph})",
-                                    [[_sqlite_val(v) for v in r] for r in batch])
+                    con.executemany(
+                        f"INSERT INTO {q(tname)} VALUES ({ph})", [[_sqlite_val(v) for v in r] for r in batch]
+                    )
                     done += len(batch)
                     prog.update(done)
             finally:
@@ -805,7 +905,9 @@ def _export_sql_script(wb: Workbook, path: str, sheets: list[Sheet], visible: bo
             sql, names, cols = _select_for_export(wb, sh, visible)
             tname = _sql_ident(sh.name)
             fh.write(f"-- Sheet: {sh.name}\nDROP TABLE IF EXISTS {q(tname)};\n")
-            defs = ",\n  ".join(f"{q(n)} {_SQL_TYPES.get(c.typ, 'TEXT')}" for n, c in zip(names, cols, strict=True))
+            defs = ",\n  ".join(
+                f"{q(n)} {_SQL_TYPES.get(c.typ, 'TEXT')}" for n, c in zip(names, cols, strict=True)
+            )
             fh.write(f"CREATE TABLE {q(tname)} (\n  {defs}\n);\n")
             cur = wb.con.cursor()
             try:
@@ -824,8 +926,9 @@ def _export_sql_script(wb: Workbook, path: str, sheets: list[Sheet], visible: bo
             fh.write("\n")
 
 
-def export_sql_url(wb: Workbook, url: str, scope: str = "sheet", sheet_id: str | None = None,
-                   if_exists: str = "replace") -> dict:
+def export_sql_url(
+    wb: Workbook, url: str, scope: str = "sheet", sheet_id: str | None = None, if_exists: str = "replace"
+) -> dict:
     """Write sheets as tables into any SQLAlchemy database."""
     try:
         import sqlalchemy as sa
@@ -840,8 +943,11 @@ def export_sql_url(wb: Workbook, url: str, scope: str = "sheet", sheet_id: str |
         for sh in sheets:
             sql, names, cols = _select_for_export(wb, sh, False)
             md = sa.MetaData()
-            tbl = sa.Table(_sql_ident(sh.name), md, *[sa.Column(n, typemap.get(c.typ, sa.Text))
-                                                     for n, c in zip(names, cols, strict=True)])
+            tbl = sa.Table(
+                _sql_ident(sh.name),
+                md,
+                *[sa.Column(n, typemap.get(c.typ, sa.Text)) for n, c in zip(names, cols, strict=True)],
+            )
             if if_exists == "replace":
                 tbl.drop(conn, checkfirst=True)
             tbl.create(conn, checkfirst=True)
@@ -873,7 +979,9 @@ def save_workbook(wb: Workbook, path: str) -> dict:
     wb.con.execute(f"ATTACH {lit(tmp)} AS {alias}")
     try:
         for sh in wb.sheets:
-            wb.con.execute(f"CREATE TABLE {alias}.{q(sh.table)} AS SELECT * FROM {q(sh.table)} ORDER BY __rid")
+            wb.con.execute(
+                f"CREATE TABLE {alias}.{q(sh.table)} AS SELECT * FROM {q(sh.table)} ORDER BY __rid"
+            )
         meta = {
             "format": 1,
             "title": wb.title,
@@ -881,7 +989,9 @@ def save_workbook(wb: Workbook, path: str) -> dict:
             "formulas": [f.to_dict() for f in wb.formulas.values()],
         }
         wb.con.execute(f"CREATE TABLE {alias}.__pysheets_meta (k VARCHAR, v VARCHAR)")
-        wb.con.execute(f"INSERT INTO {alias}.__pysheets_meta VALUES ('workbook', ?)", [json.dumps(meta, default=str)])
+        wb.con.execute(
+            f"INSERT INTO {alias}.__pysheets_meta VALUES ('workbook', ?)", [json.dumps(meta, default=str)]
+        )
     finally:
         wb.con.execute(f"DETACH {alias}")
     os.replace(tmp, path)
@@ -911,7 +1021,9 @@ def open_workbook(wb: Workbook, path: str) -> dict:
             wb._drop_view(sh)
         sheets = [Sheet.from_meta(m) for m in meta["sheets"]]
         for sh in sheets:
-            wb.con.execute(f"CREATE TABLE {q(sh.table)} AS SELECT * FROM {alias}.{q(sh.table)} ORDER BY __rid")
+            wb.con.execute(
+                f"CREATE TABLE {q(sh.table)} AS SELECT * FROM {alias}.{q(sh.table)} ORDER BY __rid"
+            )
     finally:
         wb.con.execute(f"DETACH {alias}")
     wb.sheets = sheets
@@ -919,6 +1031,7 @@ def open_workbook(wb: Workbook, path: str) -> dict:
     for fd in meta.get("formulas", []):
         fd = dict(fd)
         fd["spill"] = tuple(fd["spill"]) if fd.get("spill") else None
+        fd["want"] = tuple(fd["want"]) if fd.get("want") else None
         fd["deps"] = []
         f = Formula(**fd)
         wb.formulas[f.id] = f
@@ -956,6 +1069,3 @@ def new_workbook(wb: Workbook) -> dict:
     wb.path = None
     wb.dirty = False
     return {"ok": True}
-
-
-

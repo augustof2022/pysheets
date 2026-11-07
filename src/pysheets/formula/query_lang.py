@@ -17,8 +17,18 @@ _TOKEN = re.compile(
     re.X,
 )
 
-_CLAUSES = ["select", "where", "group by", "pivot", "order by", "limit", "offset", "label",
-            "format", "options"]
+_CLAUSES = [
+    "select",
+    "where",
+    "group by",
+    "pivot",
+    "order by",
+    "limit",
+    "offset",
+    "label",
+    "format",
+    "options",
+]
 
 _AGGS = {"sum", "avg", "count", "max", "min"}
 
@@ -32,7 +42,7 @@ def _tokens(q: str) -> list[tuple[str, str]]:
         if not m or m.end() == pos:
             if q[pos:].strip() == "":
                 break
-            raise _err(f"Unexpected text in query near '{q[pos:pos + 15]}'")
+            raise _err(f"Unexpected text in query near '{q[pos : pos + 15]}'")
         kind = m.lastgroup
         out.append((kind, m.group(kind)))
         pos = m.end()
@@ -178,7 +188,11 @@ def translate_query(comp, data, query: str, headers: int):
                         typ = typ or "num"
                     i = j + 1
                     continue
-                if low in ("date", "datetime", "timestamp", "timeofday") and nxt and tokens[i + 1][0] == "str":
+                if (
+                    low in ("date", "datetime", "timestamp", "timeofday")
+                    and nxt
+                    and tokens[i + 1][0] == "str"
+                ):
                     lit = tokens[i + 1][1][1:-1]
                     sqlt = {"date": "DATE", "timeofday": "TIME"}.get(low, "TIMESTAMP")
                     out.append(f"{sqlt} {sql_str(lit)}")
@@ -220,8 +234,12 @@ def translate_query(comp, data, query: str, headers: int):
                 lab = labels_in[idmap[name]]
                 return lab if lab is not None else ""
         # aggregate of a column → "sum Price"
-        if (len(item_toks) == 4 and item_toks[0][1].lower() in _AGGS and item_toks[1][1] == "("
-                and item_toks[3][1] == ")"):
+        if (
+            len(item_toks) == 4
+            and item_toks[0][1].lower() in _AGGS
+            and item_toks[1][1] == "("
+            and item_toks[3][1] == ")"
+        ):
             name = item_toks[2][1].strip("`").upper()
             if name in idmap:
                 lab = labels_in[idmap[name]] or item_toks[2][1]
@@ -241,8 +259,10 @@ def translate_query(comp, data, query: str, headers: int):
     pivot_items = _split_commas(clauses.get("pivot", []))
 
     def is_agg(item):
-        return any(t[0] == "id" and t[1].lower() in _AGGS and i + 1 < len(item) and item[i + 1][1] == "("
-                   for i, t in enumerate(item))
+        return any(
+            t[0] == "id" and t[1].lower() in _AGGS and i + 1 < len(item) and item[i + 1][1] == "("
+            for i, t in enumerate(item)
+        )
 
     custom_labels: dict[str, str] = {}
     for lab_item in _split_commas(clauses.get("label", [])):
@@ -304,8 +324,10 @@ def translate_query(comp, data, query: str, headers: int):
         inner += " GROUP BY " + ", ".join(group_sql)
     out_alias = comp.alias("qr")
     vcols = ", ".join(f"v{j}" for j in range(len(sel_exprs)))
-    frm = (f"(SELECT {vcols}, row_number() OVER ({'ORDER BY ' + key_order if key_order else ''}) AS __o "
-           f"FROM ({inner}) AS _qi) AS {out_alias}")
+    frm = (
+        f"(SELECT {vcols}, row_number() OVER ({'ORDER BY ' + key_order if key_order else ''}) AS __o "
+        f"FROM ({inner}) AS _qi) AS {out_alias}"
+    )
     conds = []
     if offset:
         conds.append(f"{out_alias}.__o > {offset}")
@@ -322,8 +344,9 @@ def translate_query(comp, data, query: str, headers: int):
     except Exception as exc:  # surface SQL problems as #VALUE!
         raise _err(str(exc).split("\n")[0]) from exc
     cols = [S(f"{out_alias}.v{j}", types[j]) for j in range(len(sel_exprs))]
-    want_header = headers != 0 and (data.header is not None or headers > 0 or bool(custom_labels)
-                                    or has_group or pivot_items)
+    want_header = headers != 0 and (
+        data.header is not None or headers > 0 or bool(custom_labels) or has_group or pivot_items
+    )
     from .compiler import lit_sql
 
     header = [lit_sql(lab) for lab in sel_labels] if want_header else None
@@ -350,13 +373,25 @@ def _fmt_label(v) -> str:
     return str(v)
 
 
-_KEYWORDS = {"and", "or", "not", "is", "null", "true", "false", "asc", "desc", "like", "in",
-             "between"}
+_KEYWORDS = {"and", "or", "not", "is", "null", "true", "false", "asc", "desc", "like", "in", "between"}
 
 _FUNC_MAP = {
-    "avg": "avg", "sum": "sum", "count": "count", "max": "max", "min": "min",
-    "upper": "upper", "lower": "lower", "year": "year", "day": "day", "hour": "hour",
-    "minute": "minute", "second": "second", "quarter": "quarter",
-    "dayofweek": "1 + dayofweek", "now": "now", "todate": "CAST",
-    "datediff": "date_diff", "millisecond": "millisecond",
+    "avg": "avg",
+    "sum": "sum",
+    "count": "count",
+    "max": "max",
+    "min": "min",
+    "upper": "upper",
+    "lower": "lower",
+    "year": "year",
+    "day": "day",
+    "hour": "hour",
+    "minute": "minute",
+    "second": "second",
+    "quarter": "quarter",
+    "dayofweek": "1 + dayofweek",
+    "now": "now",
+    "todate": "CAST",
+    "datediff": "date_diff",
+    "millisecond": "millisecond",
 }

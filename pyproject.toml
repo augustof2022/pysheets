@@ -29,10 +29,16 @@ sql = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6"]
+build = ["pyinstaller>=6.10"]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pysheets"]
+# the built UI is git-ignored but must ship inside the wheel
+artifacts = ["src/pysheets/web/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

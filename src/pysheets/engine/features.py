@@ -277,8 +277,10 @@ def _dup_table(wb: Workbook, sh: Sheet, cols: list[Column], key: str) -> str:
     if ck not in wb._cache:
         expr = " || '␟' || ".join(f"coalesce(lower({txt(S(q(c.id), c.typ))}), '')" for c in cols)
         nonnull = " OR ".join(f"{q(c.id)} IS NOT NULL" for c in cols)
-        wb.con.execute(f"CREATE OR REPLACE TEMP TABLE {name} AS SELECT {expr} AS k FROM {q(sh.table)} "
-                       f"WHERE {nonnull} GROUP BY 1 HAVING count(*) > 1")
+        wb.con.execute(
+            f"CREATE OR REPLACE TEMP TABLE {name} AS SELECT {expr} AS k FROM {q(sh.table)} "
+            f"WHERE {nonnull} GROUP BY 1 HAVING count(*) > 1"
+        )
         wb._cache[ck] = True
     return name
 
@@ -288,8 +290,24 @@ def cond_format_expr(wb: Workbook, sh: Sheet, rule: dict, col: Column) -> str | 
     x = f"t.{q(col.id)}"
     xs = S(x, col.typ)
     try:
-        if kind in ("gt", "gte", "lt", "lte", "eq", "neq", "between", "not_between", "contains",
-                    "not_contains", "starts", "ends", "exact", "empty", "not_empty", "regex"):
+        if kind in (
+            "gt",
+            "gte",
+            "lt",
+            "lte",
+            "eq",
+            "neq",
+            "between",
+            "not_between",
+            "contains",
+            "not_contains",
+            "starts",
+            "ends",
+            "exact",
+            "empty",
+            "not_empty",
+            "regex",
+        ):
             return _compare_expr(col, x, kind, rule.get("value"), rule.get("value2"))
         if kind in ("duplicate", "unique"):
             tbl = _dup_table(wb, sh, [col], col.id)
@@ -303,24 +321,32 @@ def cond_format_expr(wb: Workbook, sh: Sheet, rule: dict, col: Column) -> str | 
         if kind in ("top", "bottom"):
             n = int(rule.get("value") or 10)
             order = "DESC" if kind == "top" else "ASC"
-            thr = _cached_scalar(wb, ("thr", sh.id, sh.version, col.id, kind, n),
-                                 f"SELECT v FROM (SELECT {num_nullable(S(q(col.id), col.typ))} AS v FROM {q(sh.table)}) "
-                                 f"WHERE v IS NOT NULL ORDER BY v {order} LIMIT 1 OFFSET {max(n - 1, 0)}")
+            thr = _cached_scalar(
+                wb,
+                ("thr", sh.id, sh.version, col.id, kind, n),
+                f"SELECT v FROM (SELECT {num_nullable(S(q(col.id), col.typ))} AS v FROM {q(sh.table)}) "
+                f"WHERE v IS NOT NULL ORDER BY v {order} LIMIT 1 OFFSET {max(n - 1, 0)}",
+            )
             if thr is None:
                 return f"({num_nullable(xs)} IS NOT NULL)"
             o = ">=" if kind == "top" else "<="
             return f"({num_nullable(xs)} {o} {float(thr)!r})"
         if kind in ("above_avg", "below_avg"):
-            avg = _cached_scalar(wb, ("avg", sh.id, sh.version, col.id),
-                                 f"SELECT avg({num_nullable(S(q(col.id), col.typ))}) FROM {q(sh.table)}")
+            avg = _cached_scalar(
+                wb,
+                ("avg", sh.id, sh.version, col.id),
+                f"SELECT avg({num_nullable(S(q(col.id), col.typ))}) FROM {q(sh.table)}",
+            )
             if avg is None:
                 return None
             o = ">" if kind == "above_avg" else "<"
             return f"({num_nullable(xs)} {o} {float(avg)!r})"
         if kind == "color_scale":
             mn, mx = _cached_scalar(
-                wb, ("mm", sh.id, sh.version, col.id),
-                f"SELECT [min(v), max(v)] FROM (SELECT {num_nullable(S(q(col.id), col.typ))} AS v FROM {q(sh.table)})")
+                wb,
+                ("mm", sh.id, sh.version, col.id),
+                f"SELECT [min(v), max(v)] FROM (SELECT {num_nullable(S(q(col.id), col.typ))} AS v FROM {q(sh.table)})",
+            )
             if mn is None or mx is None:
                 return None
             span = (mx - mn) or 1.0
@@ -357,19 +383,27 @@ def validation_expr(wb: Workbook, sh: Sheet, rule: dict, col: Column, x: S | Non
                 arr = comp.to_relation(arr)
                 b = arr.base
                 where = " AND ".join(b.where) or "TRUE"
-                return (f"(lower({txt(x)}) IN (SELECT lower({txt(arr.cols[0])}) FROM {b.frm} WHERE {where}))")
+                return f"(lower({txt(x)}) IN (SELECT lower({txt(arr.cols[0])}) FROM {b.frm} WHERE {where}))"
             vals = [str(v) for v in rule.get("values") or []]
             if not vals:
                 return None
             return f"(lower({txt(x)}) IN ({', '.join(sql_str(v.lower()) for v in vals)}))"
         if kind == "number":
             op = rule.get("op", "between")
-            e = _compare_expr(Column(id="x", duck="DOUBLE"), "__X__", op, rule.get("value"), rule.get("value2"))
-            return None if e is None else f"({num_nullable(x)} IS NOT NULL AND {e.replace('__X__', num_nullable(x))})"
+            e = _compare_expr(
+                Column(id="x", duck="DOUBLE"), "__X__", op, rule.get("value"), rule.get("value2")
+            )
+            return (
+                None
+                if e is None
+                else f"({num_nullable(x)} IS NOT NULL AND {e.replace('__X__', num_nullable(x))})"
+            )
         if kind == "text_length":
             op = rule.get("op", "between")
             ln = f"CAST(length({txt(x)}) AS DOUBLE)"
-            e = _compare_expr(Column(id="x", duck="DOUBLE"), "__X__", op, rule.get("value"), rule.get("value2"))
+            e = _compare_expr(
+                Column(id="x", duck="DOUBLE"), "__X__", op, rule.get("value"), rule.get("value2")
+            )
             return None if e is None else e.replace("__X__", ln)
         if kind == "date":
             op = rule.get("op", "between")
@@ -377,7 +411,9 @@ def validation_expr(wb: Workbook, sh: Sheet, rule: dict, col: Column, x: S | Non
             e = _compare_expr(Column(id="x", duck="DATE"), "__X__", op, rule.get("value"), rule.get("value2"))
             return None if e is None else f"({d} IS NOT NULL AND {e.replace('__X__', d)})"
         if kind == "text_contains":
-            return f"({txt(x)} ILIKE {sql_str('%' + _esc_like(str(rule.get('value', ''))) + '%')} ESCAPE '\\')"
+            return (
+                f"({txt(x)} ILIKE {sql_str('%' + _esc_like(str(rule.get('value', ''))) + '%')} ESCAPE '\\')"
+            )
         if kind == "text_not_contains":
             return f"(NOT ({txt(x)} ILIKE {sql_str('%' + _esc_like(str(rule.get('value', ''))) + '%')} ESCAPE '\\'))"
         if kind == "text_is":
@@ -394,8 +430,10 @@ def validation_expr(wb: Workbook, sh: Sheet, rule: dict, col: Column, x: S | Non
             return f"(upper({txt(x)}) IN ('TRUE', 'FALSE'))"
         if kind == "unique":
             if not x.sql.startswith("t."):
-                cnt = wb.con.execute(f"SELECT count(*) FROM {q(sh.table)} WHERE lower({txt(S(q(col.id), col.typ))}) = "
-                                     f"lower({txt(x)})").fetchone()[0]
+                cnt = wb.con.execute(
+                    f"SELECT count(*) FROM {q(sh.table)} WHERE lower({txt(S(q(col.id), col.typ))}) = "
+                    f"lower({txt(x)})"
+                ).fetchone()[0]
                 return "TRUE" if cnt == 0 else "FALSE"
             tbl = _dup_table(wb, sh, [col], col.id)
             return f"(coalesce(lower({txt(x)}), '') NOT IN (SELECT k FROM {tbl}))"
@@ -427,7 +465,8 @@ def add_validation(wb: Workbook, sheet_id: str, rule: dict) -> dict:
             c = sh.col_by_id(cid)
             nonbool = wb.con.execute(
                 f"SELECT count(*) FROM {q(sh.table)} WHERE {q(c.id)} IS NOT NULL AND "
-                f"TRY_CAST({txt(S(q(c.id), c.typ))} AS BOOLEAN) IS NULL").fetchone()[0]
+                f"TRY_CAST({txt(S(q(c.id), c.typ))} AS BOOLEAN) IS NULL"
+            ).fetchone()[0]
             if nonbool == 0 and c.duck != "BOOLEAN":
                 wb._retype(sh, c, "BOOLEAN")
     wb._touch(sh)
@@ -460,7 +499,9 @@ def validation_report(wb: Workbook, sheet_id: str, rule_id: str | None = None) -
             if e is None:
                 continue
             cond = wb._row_bound(rule, f"(t.{q(col.id)} IS NOT NULL AND NOT coalesce({e}, FALSE))")
-            n, mn = wb.con.execute(f"SELECT count(*), min(t.__rid) FROM {q(sh.table)} t WHERE {cond}").fetchone()
+            n, mn = wb.con.execute(
+                f"SELECT count(*), min(t.__rid) FROM {q(sh.table)} t WHERE {cond}"
+            ).fetchone()
             total += n
             if mn is not None and (first is None or mn + 1 < first[0]):
                 first = (mn + 1, sh.col_index(cid))
@@ -484,8 +525,10 @@ def validation_options(wb: Workbook, sheet_id: str, rule_id: str, limit: int = 1
         arr = comp.to_relation(arr)
         b = arr.base
         where = " AND ".join(b.where) or "TRUE"
-        rows = wb.con.execute(f"SELECT DISTINCT {txt(arr.cols[0])} AS v FROM {b.frm} WHERE {where} AND "
-                              f"{arr.cols[0].sql} IS NOT NULL ORDER BY 1 LIMIT {limit}").fetchall()
+        rows = wb.con.execute(
+            f"SELECT DISTINCT {txt(arr.cols[0])} AS v FROM {b.frm} WHERE {where} AND "
+            f"{arr.cols[0].sql} IS NOT NULL ORDER BY 1 LIMIT {limit}"
+        ).fetchall()
         return {"values": [r[0] for r in rows]}
     return {"values": [str(v) for v in rule.get("values") or []]}
 
@@ -497,18 +540,31 @@ def check_value_against_rules(wb: Workbook, sh: Sheet, col: int, value, row: int
     for rule in sh.validations:
         if not rule.get("strict") or c.id not in rule.get("cols", []):
             continue
-        if row is not None and (row < (rule.get("r1") or 1) or (rule.get("r2") is not None and row > rule["r2"])):
+        if row is not None and (
+            row < (rule.get("r1") or 1) or (rule.get("r2") is not None and row > rule["r2"])
+        ):
             continue
         lit = duck_literal(value)
-        typ = (NUM if isinstance(value, (int, float)) and not isinstance(value, bool) else
-               BOOL if isinstance(value, bool) else DATE if type(value).__name__ == "date" else
-               TS if type(value).__name__ == "datetime" else STR)
+        typ = (
+            NUM
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+            else BOOL
+            if isinstance(value, bool)
+            else DATE
+            if type(value).__name__ == "date"
+            else TS
+            if type(value).__name__ == "datetime"
+            else STR
+        )
         e = validation_expr(wb, sh, rule, c, S(lit, typ))
         if e is None:
             continue
         ok = wb.con.execute(f"SELECT coalesce({e}, FALSE)").fetchone()[0]
         if not ok:
-            return rule.get("message") or "The value you entered violates the data validation rule for this cell."
+            return (
+                rule.get("message")
+                or "The value you entered violates the data validation rule for this cell."
+            )
     return None
 
 
@@ -539,9 +595,18 @@ def _py_match(s: str | None, query: str, match_case: bool, whole: bool, regex: b
     return s == query if whole else query in s
 
 
-def find(wb: Workbook, sheet_id: str, query: str, match_case: bool = False, whole: bool = False,
-         regex: bool = False, row: int = 0, col: int = -1, backwards: bool = False,
-         all_sheets: bool = False) -> dict:
+def find(
+    wb: Workbook,
+    sheet_id: str,
+    query: str,
+    match_case: bool = False,
+    whole: bool = False,
+    regex: bool = False,
+    row: int = 0,
+    col: int = -1,
+    backwards: bool = False,
+    all_sheets: bool = False,
+) -> dict:
     if not query:
         return {"found": False, "count": 0}
     sheets = wb.sheets if all_sheets else [wb.sheet(sheet_id)]
@@ -553,7 +618,7 @@ def find(wb: Workbook, sheet_id: str, query: str, match_case: bool = False, whol
             per_sheet.append(0)
             continue
         conds = [_match_expr(S(f"t.{q(c.id)}", c.typ), query, match_case, whole, regex) for c in sh.columns]
-        cnt_sql = " + ".join(f"CAST({c} AS INTEGER)" for c in conds)
+        cnt_sql = " + ".join(f"coalesce(CAST({c} AS INTEGER), 0)" for c in conds)
         n = wb.con.execute(f"SELECT coalesce(sum({cnt_sql}), 0) FROM {q(sh.table)} t").fetchone()[0]
         n += sum(1 for c in sh.columns if _py_match(c.name, query, match_case, whole, regex))
         per_sheet.append(int(n))
@@ -569,11 +634,24 @@ def find(wb: Workbook, sheet_id: str, query: str, match_case: bool = False, whol
         if per_sheet[si] == 0:
             first_pass = False
             continue
-        r0, c0 = (row, col) if (first_pass and sh.id == sheet_id) else ((1 << 60, 1 << 30) if backwards else (0, -1))
+        r0, c0 = (
+            (row, col)
+            if (first_pass and sh.id == sheet_id)
+            else ((1 << 60, 1 << 30) if backwards else (0, -1))
+        )
         hit = _find_in_sheet(wb, sh, query, match_case, whole, regex, r0, c0, backwards)
         if hit is None and first_pass and sh.id == sheet_id and not all_sheets:
-            hit = _find_in_sheet(wb, sh, query, match_case, whole, regex,
-                                 (1 << 60) if backwards else 0, (1 << 30) if backwards else -1, backwards)
+            hit = _find_in_sheet(
+                wb,
+                sh,
+                query,
+                match_case,
+                whole,
+                regex,
+                (1 << 60) if backwards else 0,
+                (1 << 30) if backwards else -1,
+                backwards,
+            )
         first_pass = False
         if hit is not None:
             r, c = hit
@@ -597,16 +675,20 @@ def _find_in_sheet(wb, sh, query, match_case, whole, regex, row, col, backwards)
                 if j > col:
                     return 0, j
         rid = max(row, 1) - 1
-        rows = wb.con.execute(f"SELECT __rid, [{lst}] FROM {q(sh.table)} t WHERE __rid >= {rid} AND ({anyc}) "
-                              f"ORDER BY __rid LIMIT 2").fetchall()
+        rows = wb.con.execute(
+            f"SELECT __rid, [{lst}] FROM {q(sh.table)} t WHERE __rid >= {rid} AND ({anyc}) "
+            f"ORDER BY __rid LIMIT 2"
+        ).fetchall()
         for r, flags in rows:
             for j, fl in enumerate(flags):
                 if fl and (r + 1 > row or j > col):
                     return r + 1, j
         return None
     rid = row - 1
-    rows = wb.con.execute(f"SELECT __rid, [{lst}] FROM {q(sh.table)} t WHERE __rid <= {rid} AND ({anyc}) "
-                          f"ORDER BY __rid DESC LIMIT 2").fetchall()
+    rows = wb.con.execute(
+        f"SELECT __rid, [{lst}] FROM {q(sh.table)} t WHERE __rid <= {rid} AND ({anyc}) "
+        f"ORDER BY __rid DESC LIMIT 2"
+    ).fetchall()
     for r, flags in rows:
         for j in range(len(flags) - 1, -1, -1):
             if flags[j] and (r + 1 < row or j < col):
@@ -617,8 +699,16 @@ def _find_in_sheet(wb, sh, query, match_case, whole, regex, row, col, backwards)
     return None
 
 
-def replace_all(wb: Workbook, sheet_id: str, query: str, replacement: str, match_case: bool = False,
-                whole: bool = False, regex: bool = False, all_sheets: bool = False) -> dict:
+def replace_all(
+    wb: Workbook,
+    sheet_id: str,
+    query: str,
+    replacement: str,
+    match_case: bool = False,
+    whole: bool = False,
+    regex: bool = False,
+    all_sheets: bool = False,
+) -> dict:
     if not query:
         return {"replaced": 0}
     sheets = wb.sheets if all_sheets else [wb.sheet(sheet_id)]
@@ -632,7 +722,9 @@ def replace_all(wb: Workbook, sheet_id: str, query: str, replacement: str, match
                 total += 1
             x = S(q(c.id), c.typ)
             cond = _match_expr(x, query, match_case, whole, regex)
-            n = wb.con.execute(f"SELECT count(*) FROM {q(sh.table)} t WHERE {cond.replace('t.', '')}").fetchone()[0]
+            n = wb.con.execute(
+                f"SELECT count(*) FROM {q(sh.table)} t WHERE {cond.replace('t.', '')}"
+            ).fetchone()[0]
             if not n:
                 continue
             total += n
@@ -663,8 +755,10 @@ def _maybe_numeric(wb: Workbook, sh: Sheet, c: Column):
     """After text edits, turn a text column back into numbers when every value is numeric."""
     if c.typ != STR:
         return
-    bad = wb.con.execute(f"SELECT count(*) FROM {q(sh.table)} WHERE {q(c.id)} IS NOT NULL AND "
-                         f"TRY_CAST({q(c.id)} AS DOUBLE) IS NULL").fetchone()[0]
+    bad = wb.con.execute(
+        f"SELECT count(*) FROM {q(sh.table)} WHERE {q(c.id)} IS NOT NULL AND "
+        f"TRY_CAST({q(c.id)} AS DOUBLE) IS NULL"
+    ).fetchone()[0]
     nonnull = wb.con.execute(f"SELECT count({q(c.id)}) FROM {q(sh.table)}").fetchone()[0]
     if bad == 0 and nonnull > 0:
         wb._retype(sh, c, "DOUBLE")
@@ -693,18 +787,19 @@ def selection_stats(wb: Workbook, sheet_id: str, rects: list[list[int]]) -> dict
             continue
         lo, hi = max(r1, 1) - 1, min(r2 - 1, sh.nrows - 1)
         if r1 == 0:
-            total["counta"] += sum(1 for c in sh.columns[c1:c2 + 1] if c.name)
+            total["counta"] += sum(1 for c in sh.columns[c1 : c2 + 1] if c.name)
         if hi < lo:
             continue
         parts = []
-        for c in sh.columns[c1:c2 + 1]:
+        for c in sh.columns[c1 : c2 + 1]:
             n = num_nullable(S(q(c.id), c.typ)) if c.typ in (NUM,) else "CAST(NULL AS DOUBLE)"
             parts.append(f"sum({n}), count({n}), count({q(c.id)}), min({n}), max({n})")
         vis = f" AND __rid IN (SELECT rid FROM {q(sh.view_table)})" if sh.view_table else ""
-        row = wb.con.execute(f"SELECT {', '.join(parts)} FROM {q(sh.table)} WHERE __rid BETWEEN {lo} AND {hi}{vis}"
-                             ).fetchone()
+        row = wb.con.execute(
+            f"SELECT {', '.join(parts)} FROM {q(sh.table)} WHERE __rid BETWEEN {lo} AND {hi}{vis}"
+        ).fetchone()
         for k in range(0, len(row), 5):
-            s, cnt, cnta, mn, mx = row[k:k + 5]
+            s, cnt, cnta, mn, mx = row[k : k + 5]
             total["sum"] += s or 0
             total["count"] += cnt or 0
             total["counta"] += cnta or 0
@@ -719,8 +814,14 @@ def selection_stats(wb: Workbook, sheet_id: str, rects: list[list[int]]) -> dict
 # ---------------------------------------------------------------- duplicates
 
 
-def duplicates(wb: Workbook, sheet_id: str, cols: list[int], action: str = "count",
-               ignore_case: bool = True, trim: bool = True) -> dict:
+def duplicates(
+    wb: Workbook,
+    sheet_id: str,
+    cols: list[int],
+    action: str = "count",
+    ignore_case: bool = True,
+    trim: bool = True,
+) -> dict:
     sh = wb.sheet(sheet_id)
     if not cols:
         raise EngineError("Choose at least one column")
@@ -739,28 +840,45 @@ def duplicates(wb: Workbook, sheet_id: str, cols: list[int], action: str = "coun
     stats = wb.con.execute(
         f"SELECT count(*), count(DISTINCT k), count(*) FILTER (WHERE n > 1), "
         f"count(DISTINCT k) FILTER (WHERE n > 1) FROM (SELECT {key} AS k, count(*) OVER (PARTITION BY {key}) AS n "
-        f"FROM {q(sh.table)} WHERE {nonblank})").fetchone()
+        f"FROM {q(sh.table)} WHERE {nonblank})"
+    ).fetchone()
     rows, distinct, in_dup_groups, groups = stats
-    info = {"rows": rows, "unique": distinct, "duplicates": rows - distinct, "rows_in_groups": in_dup_groups,
-            "groups": groups}
+    info = {
+        "rows": rows,
+        "unique": distinct,
+        "duplicates": rows - distinct,
+        "rows_in_groups": in_dup_groups,
+        "groups": groups,
+    }
     if action == "count":
         examples = wb.con.execute(
             f"SELECT k, n FROM (SELECT {key} AS k, count(*) AS n FROM {q(sh.table)} WHERE {nonblank} GROUP BY 1) "
-            f"WHERE n > 1 ORDER BY n DESC LIMIT 20").fetchall()
+            f"WHERE n > 1 ORDER BY n DESC LIMIT 20"
+        ).fetchall()
         info["top"] = [[k.replace("␟", " | "), n] for k, n in examples]
         return info
     if action == "highlight":
-        add_cond_format(wb, sh.id, {"kind": "duplicate_row" if len(columns) > 1 else "duplicate",
-                                    "cols": [c.id for c in columns], "key_cols": [c.id for c in columns],
-                                    "style": {"bg": "#fff1c2", "fg": "#7a4b00"}, "name": "Duplicates"})
+        add_cond_format(
+            wb,
+            sh.id,
+            {
+                "kind": "duplicate_row" if len(columns) > 1 else "duplicate",
+                "cols": [c.id for c in columns],
+                "key_cols": [c.id for c in columns],
+                "style": {"bg": "#fff1c2", "fg": "#7a4b00"},
+                "name": "Duplicates",
+            },
+        )
         return info
     if action == "mark":
         wb._begin("Mark duplicates", [(sh.id, "table")])
         newc = Column(id=sh.new_col_id(), name="Is duplicate", duck="BOOLEAN", width=110)
         wb.con.execute(f"ALTER TABLE {q(sh.table)} ADD COLUMN {q(newc.id)} BOOLEAN")
-        wb.con.execute(f"UPDATE {q(sh.table)} AS t SET {q(newc.id)} = s.d FROM (SELECT __rid, "
-                       f"row_number() OVER (PARTITION BY {key} ORDER BY __rid) > 1 AS d FROM {q(sh.table)} "
-                       f"WHERE {nonblank}) s WHERE t.__rid = s.__rid")
+        wb.con.execute(
+            f"UPDATE {q(sh.table)} AS t SET {q(newc.id)} = s.d FROM (SELECT __rid, "
+            f"row_number() OVER (PARTITION BY {key} ORDER BY __rid) > 1 AS d FROM {q(sh.table)} "
+            f"WHERE {nonblank}) s WHERE t.__rid = s.__rid"
+        )
         sh.columns.append(newc)
         wb._touch(sh)
         return info
@@ -769,11 +887,15 @@ def duplicates(wb: Workbook, sheet_id: str, cols: list[int], action: str = "coun
         for f in [f for f in wb.formulas.values() if f.sheet_id == sh.id and f.kind == "cell"]:
             wb._clear_spill(f)
         mp = f"__dmap_{sh.id}"
-        wb.con.execute(f"CREATE OR REPLACE TEMP TABLE {mp} AS SELECT __rid AS old, row_number() OVER (ORDER BY __rid) - 1 AS new "
-                       f"FROM {q(sh.table)} QUALIFY ({nonblank.replace(' OR ', ' OR ')}) IS NOT TRUE OR "
-                       f"row_number() OVER (PARTITION BY {key} ORDER BY __rid) = 1")
-        wb.con.execute(f"CREATE OR REPLACE TABLE {q(sh.table)} AS SELECT m.new AS __rid, t.* EXCLUDE (__rid) FROM "
-                       f"{q(sh.table)} t JOIN {mp} m ON m.old = t.__rid ORDER BY m.new")
+        wb.con.execute(
+            f"CREATE OR REPLACE TEMP TABLE {mp} AS SELECT __rid AS old, row_number() OVER (ORDER BY __rid) - 1 AS new "
+            f"FROM {q(sh.table)} QUALIFY ({nonblank.replace(' OR ', ' OR ')}) IS NOT TRUE OR "
+            f"row_number() OVER (PARTITION BY {key} ORDER BY __rid) = 1"
+        )
+        wb.con.execute(
+            f"CREATE OR REPLACE TABLE {q(sh.table)} AS SELECT m.new AS __rid, t.* EXCLUDE (__rid) FROM "
+            f"{q(sh.table)} t JOIN {mp} m ON m.old = t.__rid ORDER BY m.new"
+        )
         mapping = dict(wb.con.execute(f"SELECT old, new FROM {mp}").fetchall()) if len(wb.formulas) else {}
         for f in list(wb.formulas.values()):
             if f.sheet_id == sh.id and f.kind == "cell" and f.row >= 1:
@@ -802,8 +924,10 @@ def transform_text(wb: Workbook, sheet_id: str, rects: list[list[int]], op: str)
         "trim": lambda x: f"trim(regexp_replace({x}, '\\s+', ' ', 'g'))",
         "upper": lambda x: f"upper({x})",
         "lower": lambda x: f"lower({x})",
-        "proper": lambda x: (f"array_to_string(list_transform(string_split(lower({x}), ' '), "
-                             f"lambda w: upper(w[1]) || w[2:]), ' ')"),
+        "proper": lambda x: (
+            f"array_to_string(list_transform(string_split(lower({x}), ' '), "
+            f"lambda w: upper(w[1]) || w[2:]), ' ')"
+        ),
         "clean": lambda x: f"regexp_replace({x}, '[\\x00-\\x1F]', '', 'g')",
     }
     if op not in exprs:
@@ -813,15 +937,22 @@ def transform_text(wb: Workbook, sheet_id: str, rects: list[list[int]], op: str)
     changed = 0
     for r1, c1, r2, c2 in rects:
         lo, hi = max(r1, 1) - 1, min(r2, sh.nrows) - 1
-        for c in sh.columns[c1:min(c2, len(sh.columns) - 1) + 1]:
+        for c in sh.columns[c1 : min(c2, len(sh.columns) - 1) + 1]:
             if r1 == 0 and c.name:
-                c.name = {"trim": lambda s: " ".join(s.split()), "upper": str.upper, "lower": str.lower,
-                          "proper": str.title, "clean": lambda s: re.sub(r"[\x00-\x1f]", "", s)}[op](c.name)
+                c.name = {
+                    "trim": lambda s: " ".join(s.split()),
+                    "upper": str.upper,
+                    "lower": str.lower,
+                    "proper": str.title,
+                    "clean": lambda s: re.sub(r"[\x00-\x1f]", "", s),
+                }[op](c.name)
             if c.typ != STR or hi < lo:
                 continue
             e = exprs[op](q(c.id))
-            n = wb.con.execute(f"SELECT count(*) FROM {q(sh.table)} WHERE __rid BETWEEN {lo} AND {hi} AND "
-                               f"{q(c.id)} IS DISTINCT FROM {e}").fetchone()[0]
+            n = wb.con.execute(
+                f"SELECT count(*) FROM {q(sh.table)} WHERE __rid BETWEEN {lo} AND {hi} AND "
+                f"{q(c.id)} IS DISTINCT FROM {e}"
+            ).fetchone()[0]
             if n:
                 wb.con.execute(f"UPDATE {q(sh.table)} SET {q(c.id)} = {e} WHERE __rid BETWEEN {lo} AND {hi}")
                 changed += n
@@ -845,7 +976,7 @@ def split_column(wb: Workbook, sheet_id: str, col: int, delimiter: str) -> dict:
         wb.con.execute(f"ALTER TABLE {q(sh.table)} ADD COLUMN {q(nc.id)} VARCHAR")
         wb.con.execute(f"UPDATE {q(sh.table)} SET {q(nc.id)} = NULLIF(trim(({parts})[{k + 1}]), '')")
         new_cols.append(nc)
-    sh.columns[col + 1:col + 1] = new_cols
+    sh.columns[col + 1 : col + 1] = new_cols
     for nc in new_cols:
         _maybe_numeric(wb, sh, nc)
     wb._touch(sh)
@@ -854,17 +985,34 @@ def split_column(wb: Workbook, sheet_id: str, col: int, delimiter: str) -> dict:
 
 # ------------------------------------------------------------------- pivots
 
-_AGG_LABEL = {"sum": "SUM", "count": "COUNT", "counta": "COUNTA", "avg": "AVERAGE", "min": "MIN", "max": "MAX",
-              "countd": "COUNTUNIQUE", "median": "MEDIAN", "stdev": "STDEV", "var": "VAR"}
+_AGG_LABEL = {
+    "sum": "SUM",
+    "count": "COUNT",
+    "counta": "COUNTA",
+    "avg": "AVERAGE",
+    "min": "MIN",
+    "max": "MAX",
+    "countd": "COUNTUNIQUE",
+    "median": "MEDIAN",
+    "stdev": "STDEV",
+    "var": "VAR",
+}
 
 
 def _agg_sql(agg: str, col: Column, alias: str = "t") -> str:
     x = f"{alias}.{q(col.id)}"
     n = num_nullable(S(x, col.typ))
     return {
-        "sum": f"sum({n})", "avg": f"avg({n})", "min": f"min({n})", "max": f"max({n})",
-        "median": f"median({n})", "stdev": f"stddev_samp({n})", "var": f"var_samp({n})",
-        "count": f"count({x})", "counta": "count(*)", "countd": f"count(DISTINCT {x})",
+        "sum": f"sum({n})",
+        "avg": f"avg({n})",
+        "min": f"min({n})",
+        "max": f"max({n})",
+        "median": f"median({n})",
+        "stdev": f"stddev_samp({n})",
+        "var": f"var_samp({n})",
+        "count": f"count({x})",
+        "counta": "count(*)",
+        "countd": f"count(DISTINCT {x})",
     }[agg]
 
 
@@ -890,23 +1038,37 @@ def _pivot_sql(wb: Workbook, spec: dict) -> tuple[str, list[str], int]:
     for k, rc in enumerate(rows):
         expr = f"t.{q(rc.id)}"
         if k == 0 and totals:
-            expr = (f"CASE WHEN grouping(t.{q(rc.id)}) = 1 THEN 'Grand Total' ELSE "
-                    f"{txt(S(f't.{q(rc.id)}', rc.typ))} END")
+            expr = (
+                f"CASE WHEN grouping(t.{q(rc.id)}) = 1 THEN 'Grand Total' ELSE "
+                f"{txt(S(f't.{q(rc.id)}', rc.typ))} END"
+            )
         select.append(f"{expr} AS r{k}")
         labels.append(rc.name or f"Row {k + 1}")
     value_exprs = []
     if colf:
         key = " || ' · ' || ".join(f"coalesce({txt(S(f't.{q(c.id)}', c.typ))}, '(blank)')" for c in colf)
-        combos = [r[0] for r in wb.con.execute(
-            f"SELECT DISTINCT {key} AS k FROM {q(src.table)} t WHERE {where} ORDER BY 1 LIMIT 300").fetchall()]
+        combos = [
+            r[0]
+            for r in wb.con.execute(
+                f"SELECT DISTINCT {key} AS k FROM {q(src.table)} t WHERE {where} ORDER BY 1 LIMIT 300"
+            ).fetchall()
+        ]
         for combo in combos:
             for vc, agg in vals:
-                value_exprs.append((f"{_agg_sql(agg, vc)} FILTER (WHERE {key} = {sql_str(combo)})",
-                                    combo if len(vals) == 1 else f"{combo} · {_AGG_LABEL[agg]} of {vc.name}"))
+                value_exprs.append(
+                    (
+                        f"{_agg_sql(agg, vc)} FILTER (WHERE {key} = {sql_str(combo)})",
+                        combo if len(vals) == 1 else f"{combo} · {_AGG_LABEL[agg]} of {vc.name}",
+                    )
+                )
         if totals:
             for vc, agg in vals:
-                value_exprs.append((_agg_sql(agg, vc), "Grand Total" if len(vals) == 1 else
-                                    f"Total {_AGG_LABEL[agg]} of {vc.name}"))
+                value_exprs.append(
+                    (
+                        _agg_sql(agg, vc),
+                        "Grand Total" if len(vals) == 1 else f"Total {_AGG_LABEL[agg]} of {vc.name}",
+                    )
+                )
     else:
         for vc, agg in vals:
             value_exprs.append((_agg_sql(agg, vc), f"{_AGG_LABEL[agg]} of {vc.name or 'value'}"))
@@ -920,12 +1082,16 @@ def _pivot_sql(wb: Workbook, spec: dict) -> tuple[str, list[str], int]:
             sql += f" GROUP BY GROUPING SETS (({group}), ())"
             order = [f"grouping(t.{q(rows[0].id)})"] + [
                 f"{'lower(' + txt(S(f't.{q(r.id)}', r.typ)) + ')' if r.typ == STR else f't.{q(r.id)}'} "
-                f"{'DESC' if spec.get('desc') else 'ASC'} NULLS LAST" for r in rows]
+                f"{'DESC' if spec.get('desc') else 'ASC'} NULLS LAST"
+                for r in rows
+            ]
         else:
             sql += f" GROUP BY {group}"
             order = [f"t.{q(r.id)} {'DESC' if spec.get('desc') else 'ASC'} NULLS LAST" for r in rows]
         if spec.get("sort_by_value"):
-            order = ([f"grouping(t.{q(rows[0].id)})"] if totals else []) + [f"v0 {'DESC' if spec.get('desc') else 'ASC'}"]
+            order = ([f"grouping(t.{q(rows[0].id)})"] if totals else []) + [
+                f"v0 {'DESC' if spec.get('desc') else 'ASC'}"
+            ]
         sql += " ORDER BY " + ", ".join(order)
     return sql, labels, len(rows)
 
@@ -935,7 +1101,9 @@ def create_pivot(wb: Workbook, spec: dict, sheet_id: str | None = None) -> dict:
     sql, labels, nrow_fields = _pivot_sql(wb, spec)
     if sheet_id is None:
         wb._begin("Create pivot table", [])
-        sh = wb.add_sheet(f"Pivot of {src.name}", ncols=0, nrows=0, index=wb.sheets.index(src) + 1, record=False)
+        sh = wb.add_sheet(
+            f"Pivot of {src.name}", ncols=0, nrows=0, index=wb.sheets.index(src) + 1, record=False
+        )
     else:
         sh = wb.sheet(sheet_id)
         wb._begin("Edit pivot table", [(sh.id, "table")])
@@ -959,7 +1127,9 @@ def _fill_pivot(wb: Workbook, sh: Sheet, spec: dict, sql: str, labels: list[str]
         c = Column(id=sh.new_col_id(), name=lab, duck=norm_duck(str(ctype)))
         sel.append(f"CAST({q(name)} AS {c.duck}) AS {q(c.id)}")
         sh.columns.append(c)
-    wb.con.execute(f"CREATE OR REPLACE TABLE {q(sh.table)} AS SELECT rowid AS __rid, {', '.join(sel)} FROM {q(raw)}")
+    wb.con.execute(
+        f"CREATE OR REPLACE TABLE {q(sh.table)} AS SELECT rowid AS __rid, {', '.join(sel)} FROM {q(raw)}"
+    )
     wb.con.execute(f"DROP TABLE IF EXISTS {q(raw)}")
     sh.nrows = wb.con.execute(f"SELECT count(*) FROM {q(sh.table)}").fetchone()[0]
     sh.frozen_rows = 1
@@ -973,8 +1143,17 @@ def _fill_pivot(wb: Workbook, sh: Sheet, spec: dict, sql: str, labels: list[str]
             c.fmt = "#,##0.##"
     sh.styles = [st for st in sh.styles if not st.get("pivot")]
     if spec.get("totals", True) and nrow_fields:
-        sh.styles.append({"r1": sh.nrows, "r2": sh.nrows, "c1": 0, "c2": max(len(sh.columns) - 1, 0), "bold": True,
-                          "bg": "#eef2ff", "pivot": True})
+        sh.styles.append(
+            {
+                "r1": sh.nrows,
+                "r2": sh.nrows,
+                "c1": 0,
+                "c2": max(len(sh.columns) - 1, 0),
+                "bold": True,
+                "bg": "#eef2ff",
+                "pivot": True,
+            }
+        )
     spec = dict(spec)
     spec["source_version"] = src.version
     spec["error"] = None
@@ -1020,13 +1199,17 @@ def set_column_type(wb: Workbook, sheet_id: str, col: int, duck: str) -> dict:
         raise EngineError("Unsupported type")
     wb._begin("Change column type", [(sh.id, "table")])
     if duck in ("DOUBLE", "BIGINT") and c.typ == STR:
-        conv = (f"TRY_CAST(replace(replace(replace(trim({q(c.id)}), ',', ''), '$', ''), '%', '') AS {duck}) "
-                f"/ CASE WHEN trim({q(c.id)}) LIKE '%\\%' ESCAPE '\\' THEN 100 ELSE 1 END")
+        conv = (
+            f"TRY_CAST(replace(replace(replace(trim({q(c.id)}), ',', ''), '$', ''), '%', '') AS {duck}) "
+            f"/ CASE WHEN trim({q(c.id)}) LIKE '%\\%' ESCAPE '\\' THEN 100 ELSE 1 END"
+        )
         wb.con.execute(f"ALTER TABLE {q(sh.table)} ALTER {q(c.id)} TYPE {duck} USING {conv}")
         c.duck = duck
     elif duck == "DATE" and c.typ == STR:
-        conv = (f"coalesce(TRY_CAST({q(c.id)} AS DATE), TRY_CAST(try_strptime({q(c.id)}, "
-                f"['%m/%d/%Y', '%d/%m/%Y', '%m/%d/%y', '%d-%b-%Y', '%b %d, %Y', '%Y/%m/%d']) AS DATE))")
+        conv = (
+            f"coalesce(TRY_CAST({q(c.id)} AS DATE), TRY_CAST(try_strptime({q(c.id)}, "
+            f"['%m/%d/%Y', '%d/%m/%Y', '%m/%d/%y', '%d-%b-%Y', '%b %d, %Y', '%Y/%m/%d']) AS DATE))"
+        )
         wb.con.execute(f"ALTER TABLE {q(sh.table)} ALTER {q(c.id)} TYPE DATE USING {conv}")
         c.duck = "DATE"
     else:
@@ -1042,9 +1225,20 @@ def column_profile(wb: Workbook, sheet_id: str, col: int) -> dict:
     c = sh.columns[col]
     x = q(c.id)
     n = num_nullable(S(x, c.typ))
-    row = wb.con.execute(f"SELECT count(*), count({x}), count(DISTINCT {x}), min({n}), max({n}), avg({n}) "
-                         f"FROM {q(sh.table)}").fetchone()
-    top = wb.con.execute(f"SELECT {txt(S(x, c.typ))}, count(*) FROM {q(sh.table)} WHERE {x} IS NOT NULL "
-                         f"GROUP BY 1 ORDER BY 2 DESC LIMIT 5").fetchall()
-    return {"rows": row[0], "filled": row[1], "distinct": row[2], "min": to_json(row[3]),
-            "max": to_json(row[4]), "avg": to_json(row[5]), "top": [[a, b] for a, b in top], "type": c.typ}
+    row = wb.con.execute(
+        f"SELECT count(*), count({x}), count(DISTINCT {x}), min({n}), max({n}), avg({n}) FROM {q(sh.table)}"
+    ).fetchone()
+    top = wb.con.execute(
+        f"SELECT {txt(S(x, c.typ))}, count(*) FROM {q(sh.table)} WHERE {x} IS NOT NULL "
+        f"GROUP BY 1 ORDER BY 2 DESC LIMIT 5"
+    ).fetchall()
+    return {
+        "rows": row[0],
+        "filled": row[1],
+        "distinct": row[2],
+        "min": to_json(row[3]),
+        "max": to_json(row[4]),
+        "avg": to_json(row[5]),
+        "top": [[a, b] for a, b in top],
+        "type": c.typ,
+    }

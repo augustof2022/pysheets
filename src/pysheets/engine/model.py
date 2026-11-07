@@ -21,8 +21,14 @@ class Column:
         return duck_to_typ(self.duck)
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "name": self.name, "type": self.typ, "duck": self.duck,
-                "width": self.width, "fmt": self.fmt}
+        return {
+            "id": self.id,
+            "name": self.name,
+            "type": self.typ,
+            "duck": self.duck,
+            "width": self.width,
+            "fmt": self.fmt,
+        }
 
 
 @dataclass
@@ -36,6 +42,7 @@ class Formula:
     row_end: int | None = None  # column formulas: last sheet row (None = through last data row)
     exceptions: list[int] = field(default_factory=list)  # column formulas: sheet rows overridden
     spill: tuple[int, int] | None = None  # (height, width) of the last array result
+    want: tuple[int, int] | None = None  # size of a blocked spill (edits there re-trigger it)
     error: str | None = None
     deps: list = field(default_factory=list)
     volatile: bool = False
