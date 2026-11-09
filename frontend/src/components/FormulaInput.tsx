@@ -2,7 +2,7 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { activeArg, argName, customDoc, getDoc, syntaxArgs, type FnDoc } from "../formulaDocs";
-import { localStorageSet, useApp } from "../store";
+import { localStorageSet, openDialog, useApp } from "../store";
 
 let helpOpenPref = (() => {
   try {
@@ -331,7 +331,9 @@ function HelpCard({ doc, argIdx, open, onToggle }: { doc: FnDoc; argIdx: number;
           ))}
           <div className="fh-foot">
             <span>{doc.category}</span>
-            <span>F1 to hide</span>
+            <button className="link" onClick={() => openDialog("docs", { fn: name })}>
+              Learn more
+            </button>
           </div>
         </div>
       )}

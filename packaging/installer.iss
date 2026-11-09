@@ -22,6 +22,9 @@ WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequiredOverridesAllowed=dialog
 ChangesAssociations=yes
+; in-app updates run this installer silently while PySheets is open: close it, then relaunch
+CloseApplications=force
+RestartApplications=no
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"
@@ -42,3 +45,11 @@ Root: HKA; Subkey: "Software\Classes\PySheets.Workbook\shell\open\command"; Valu
 
 [Run]
 Filename: "{app}\PySheets.exe"; Description: "Launch PySheets"; Flags: nowait postinstall skipifsilent
+; in-app update (setup.exe /SILENT /relaunch=1): start the new version when done
+Filename: "{app}\PySheets.exe"; Flags: nowait runasoriginaluser; Check: RelaunchAfterUpdate
+
+[Code]
+function RelaunchAfterUpdate: Boolean;
+begin
+  Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;

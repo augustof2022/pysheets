@@ -324,7 +324,11 @@ export const TOP_MENUS: TopMenu[] = [
   {
     label: "Help",
     items: () => [
+      { label: "Documentation", icon: "book-open", shortcut: "F1", run: () => openDialog("docs") },
+      { label: "Function list", icon: "sigma", run: () => openDialog("docs", { section: "functions" }) },
       { label: "Keyboard shortcuts", icon: "keyboard", shortcut: `${MOD}+/`, run: () => openDialog("shortcuts") },
+      { divider: true },
+      { label: "Check for updates…", icon: "refresh-cw", run: () => openDialog("about", { check: true }) },
       { label: "About PySheets", icon: "info", run: () => openDialog("about") },
     ],
   },

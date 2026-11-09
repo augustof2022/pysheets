@@ -3,7 +3,7 @@ import { rpc, RpcError } from "./api";
 import type { CellInfo, Rect, Selection, SheetInfo, Stats, WorkbookInfo } from "./types";
 
 export type PanelKind = "pivot" | "cf" | "dv" | "dups" | "profile" | "clean";
-export type DialogKind = "import" | "export" | "sql" | "shortcuts" | "about" | "split" | "google";
+export type DialogKind = "import" | "export" | "sql" | "shortcuts" | "about" | "split" | "google" | "docs";
 
 export interface ScriptLine {
   t: number;

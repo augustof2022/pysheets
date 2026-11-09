@@ -5,9 +5,11 @@ import { DESKTOP, downloadUrl, rpc, upload } from "../api";
 import { triggerDownload } from "../fileops";
 import { call, closeDialog, currentSheet, query, selectSheet, toast, useApp } from "../store";
 import { MOD } from "../shortcuts";
+import { AboutDialog } from "./About";
+import { DocsDialog } from "./Docs";
 import { GoogleDialog } from "./GoogleDialog";
 
-function Shell({ title, sub, children, footer, wide }: { title: string; sub?: string; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean }) {
+export function Shell({ title, sub, children, footer, wide }: { title: string; sub?: string; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && closeDialog();
     window.addEventListener("keydown", onKey);
@@ -503,7 +505,7 @@ export function SplitDialog() {
   );
 }
 
-const SHORTCUTS: [string, string][] = [
+export const SHORTCUTS: [string, string][] = [
   ["Edit cell", "Enter / F2 / start typing"],
   ["Commit and fill whole column", `${MOD}+Enter`],
   ["New line in cell", "Alt+Enter"],
@@ -540,17 +542,6 @@ export function ShortcutsDialog() {
   );
 }
 
-export function AboutDialog() {
-  return (
-    <Shell title="PySheets" sub="A fast desktop spreadsheet for millions of rows">
-      <p className="about">
-        Data lives in an embedded DuckDB database; formulas compile to vectorised SQL so a column formula over ten million rows runs in a single query. Built with Python, DuckDB, pywebview and a
-        canvas-rendered grid.
-      </p>
-    </Shell>
-  );
-}
-
 export function Dialogs() {
   const d = useApp((s) => s.dialog);
   if (d === "import") return <ImportDialog />;
@@ -558,6 +549,7 @@ export function Dialogs() {
   if (d === "sql") return <SqlDialog />;
   if (d === "shortcuts") return <ShortcutsDialog />;
   if (d === "about") return <AboutDialog />;
+  if (d === "docs") return <DocsDialog />;
   if (d === "split") return <SplitDialog />;
   if (d === "google") return <GoogleDialog />;
   return null;

@@ -110,6 +110,10 @@ export function handleShortcut(e: KeyboardEvent, ctx: "grid" | "global"): boolea
       return true;
     }
   }
+  if (e.key === "F1" && !mod && !e.altKey) {
+    openDialog("docs");
+    return true;
+  }
   if (e.altKey && e.shiftKey && e.key === "5") {
     A.toggleStyle("strike");
     return true;

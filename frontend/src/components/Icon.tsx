@@ -1,5 +1,8 @@
 import {
   AlignCenter,
+  BookOpen,
+  RefreshCw,
+  Sigma,
   AlignLeft,
   AlignRight,
   ArrowDown,
@@ -60,6 +63,9 @@ const MAP: Record<string, LucideIcon> = {
   "sort-desc": ArrowDownZA,
   chart: BarChart3,
   bold: Bold,
+  "book-open": BookOpen,
+  "refresh-cw": RefreshCw,
+  sigma: Sigma,
   check: Check,
   "check-square": CheckSquare,
   "chevron-down": ChevronDown,

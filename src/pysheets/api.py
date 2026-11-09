@@ -456,6 +456,84 @@ def _io_temp(wb, p):
 # ----------------------------------------------------------------- dialogs
 
 
+@rpc("app.version", mutates=False, lock=False)
+def _app_version(wb, p):
+    from . import __version__
+    from .updater import RELEASES_PAGE, install_kind
+
+    return {"version": __version__, "install_kind": install_kind(), "releases": RELEASES_PAGE}
+
+
+@rpc("app.check_update", mutates=False, lock=False)
+def _app_check_update(wb, p):
+    from .updater import UPDATER, UpdateError, check
+
+    try:
+        info = check()
+    except UpdateError as e:
+        raise EngineError(str(e)) from e
+    info["download"] = UPDATER.state()
+    _UPDATE_INFO.clear()
+    _UPDATE_INFO.update(info)
+    return info
+
+
+@rpc("app.update_start", mutates=False, lock=False)
+def _app_update_start(wb, p):
+    from .updater import UPDATER, UpdateError
+
+    if not _UPDATE_INFO.get("update_available"):
+        raise EngineError("Check for updates first")
+    try:
+        return UPDATER.start(_UPDATE_INFO)
+    except UpdateError as e:
+        raise EngineError(str(e)) from e
+
+
+@rpc("app.update_status", mutates=False, lock=False)
+def _app_update_status(wb, p):
+    from .updater import UPDATER
+
+    return UPDATER.state()
+
+
+@rpc("app.update_cancel", mutates=False, lock=False)
+def _app_update_cancel(wb, p):
+    from .updater import UPDATER
+
+    return UPDATER.cancel()
+
+
+@rpc("app.update_install", mutates=False, lock=False)
+def _app_update_install(wb, p):
+    """Run the downloaded installer, then close this window so the files can be replaced."""
+    import threading
+
+    from .updater import UPDATER, UpdateError
+
+    try:
+        st = UPDATER.install()
+    except UpdateError as e:
+        raise EngineError(str(e)) from e
+    win = (p.get("__ctx") or {}).get("window")
+    if win is not None:
+        threading.Timer(1.5, win.destroy).start()
+    return st
+
+
+@rpc("app.open_releases", mutates=False, lock=False)
+def _app_open_releases(wb, p):
+    import webbrowser
+
+    from .updater import RELEASES_PAGE
+
+    webbrowser.open(RELEASES_PAGE)
+    return {"url": RELEASES_PAGE}
+
+
+_UPDATE_INFO: dict = {}
+
+
 @rpc("paths.folders", mutates=False, lock=False)
 def _paths_folders(wb, p):
     from .paths import exports_dir, workbooks_dir
