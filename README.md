@@ -38,7 +38,7 @@ To make **Sign in with Google** work without a `credentials.json` step, add a re
 `GOOGLE_OAUTH_CLIENT_JSON` containing a Desktop-app OAuth client JSON. The Windows build bundles it.
 
 To publish a GitHub Release, run **Actions → Windows app → Run workflow** and enter a version
-such as `v0.3.3` in *release*; the workflow creates the tag and attaches both files. Pushing a
+such as `v0.3.4` in *release*; the workflow creates the tag and attaches both files. Pushing a
 `v*` tag does the same.
 The app needs the Microsoft Edge WebView2 runtime, which ships with Windows 10 and 11.
 

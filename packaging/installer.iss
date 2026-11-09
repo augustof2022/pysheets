@@ -1,7 +1,7 @@
 ; Inno Setup script: wraps dist\PySheets into PySheets-Setup.exe
-;   iscc /DAppVersion=0.3.3 packaging\installer.iss
+;   iscc /DAppVersion=0.3.4 packaging\installer.iss
 #ifndef AppVersion
-  #define AppVersion "0.3.3"
+  #define AppVersion "0.3.4"
 #endif
 
 [Setup]
