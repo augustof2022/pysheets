@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 - **Filtered views edit only what you see:** with a filter on, clearing, deleting rows, pasting (each line goes to the next visible row), copying, fill down / drag-fill, Ctrl+Enter column fills, formatting and text cleanup affect only the visible rows. Hidden rows are never changed, and the toast says how many visible rows were affected.
 - **Format-tolerant lookups:** VLOOKUP, XLOOKUP, MATCH, HLOOKUP, the COUNTIF/SUMIF family and FILTER match keys that differ only in format (123 vs "00123", trailing or non-breaking spaces, "1,234" vs 1234, invisible characters). Exact matches win; format-only matches get an amber corner and a summary after the formula runs (exact / format differs / really missing).
 - **Data → Check key matches:** compares two key columns, explains each mismatch, lists keys that are really missing, and normalises both columns to numbers or text (optionally keeping a copy of the originals). Switch lookups between Smart and Strict matching.
