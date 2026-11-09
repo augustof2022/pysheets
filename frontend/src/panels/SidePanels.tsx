@@ -698,8 +698,7 @@ function CleanPanel() {
   const run = async (op: string, label: string) => {
     const sh = currentSheet();
     if (!sh) return;
-    const rects = A.selectionRects().map((r) => [r.r1, r.c1, r.r2, r.c2]);
-    const r = await call<{ changed: number }>("clean.text", { sheet: sh.id, rects, op }, { label });
+    const r = await call<{ changed: number }>("clean.text", { sheet: sh.id, ...A.rectsParam(), op }, { label });
     if (r) toast(`${label}: ${r.changed.toLocaleString()} cells changed`, "success");
     A.invalidate();
   };

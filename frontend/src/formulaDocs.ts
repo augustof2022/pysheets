@@ -118,6 +118,7 @@ const DOCS: Record<string, Row> = {
   FALSE: [LOGIC, "FALSE()", "Returns the logical value FALSE.", "FALSE()", []],
 
   // ----------------------------------------------------------------- text
+  CLEANKEY: [TEXT, "CLEANKEY(value)", "The normalised key Smart matching compares: hidden characters removed, spaces trimmed and collapsed, lower case, and numeric text reduced to its number.", 'CLEANKEY(" 00123 ")', ["The value or cell to normalise."]],
   TRIM: [TEXT, "TRIM(text)", "Removes leading, trailing and repeated spaces in text.", 'TRIM("  lorem   ipsum ")', ["The text or cell to trim."]],
   CLEAN: [TEXT, "CLEAN(text)", "Returns the text with the non-printable ASCII characters removed.", "CLEAN(A2)", ["The text to clean."]],
   UPPER: [TEXT, "UPPER(text)", "Converts text to uppercase.", 'UPPER("lorem")', ["The text to convert."]],

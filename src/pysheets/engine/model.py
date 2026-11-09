@@ -48,6 +48,9 @@ class Formula:
     error: str | None = None
     deps: list = field(default_factory=list)
     volatile: bool = False
+    # lookup diagnostics from the last evaluation: rows matched exactly, matched only after
+    # normalising formats ("fuzzy"), and found nothing ("missing")
+    match: dict | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)

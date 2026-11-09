@@ -177,7 +177,10 @@ export function FormulaBar() {
               <AlertTriangle size={13} /> {err.split(" ")[0]}
             </>
           ) : colF ? (
-            <>ƒ column formula · rows {(colF.row ?? 0) + 1}–{((colF.row_end ?? 0) + 1).toLocaleString()}</>
+            <>
+              ƒ column formula · rows {(colF.row ?? 0) + 1}–{((colF.row_end ?? 0) + 1).toLocaleString()}
+              {colF.skipped ? ` · ${colF.skipped.toLocaleString()} skipped` : ""}
+            </>
           ) : (
             <>spilled from {spill!.anchor}</>
           )}

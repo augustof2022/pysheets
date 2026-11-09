@@ -312,6 +312,80 @@ def eq_sql(a: S, b: S) -> str:
     return f"({num_nullable(a)} = {num_nullable(b)})"
 
 
+# ------------------------------------------------- smart (format-tolerant) matching
+#
+# Lookups compare keys in two tiers.  *Exact* means "same kind of value and equal"
+# (text with text, case-insensitive; numbers with numbers; dates with dates).  The
+# *normalised* tier compares the key's canonical text: invisible characters removed,
+# whitespace trimmed and collapsed, lower-cased, and numeric-looking text reduced to
+# the number it spells ("00123", "1,234.0", " 123 " → "123", "1234").  A match that
+# exists only in the normalised tier is a *format mismatch*: the value is there, the
+# formatting differs (text vs number, stray spaces, leading zeros, separators…).
+
+# Installed on every workbook connection (see Workbook.__init__).  A lambda binds the
+# cleaned text once; a scalar sub-query would defeat DuckDB's join decorrelation.
+NORMKEY_MACROS = r"""
+CREATE OR REPLACE TEMP MACRO ps_cleantext(s) AS
+  trim(regexp_replace(regexp_replace(s, '[\x{200B}-\x{200D}\x{2060}\x{FEFF}\x{00AD}]', '', 'g'),
+       '[\s\x{00A0}\x{2000}-\x{200A}\x{202F}\x{205F}\x{3000}[:cntrl:]]+', ' ', 'g'));
+CREATE OR REPLACE TEMP MACRO ps_textnum(c) AS
+  CASE WHEN regexp_full_match(c, '[+-]?[$€£¥]?[+-]?(\d{1,3}(,\d{3})+|\d+)(\.\d*)?([eE][+-]?\d+)?|[+-]?[$€£¥]?\.\d+')
+       THEN TRY_CAST(regexp_replace(c, '[,$€£¥]', '', 'g') AS DOUBLE) END;
+CREATE OR REPLACE TEMP MACRO ps_numtext(n) AS
+  CASE WHEN n = trunc(n) AND abs(n) < 1e15 THEN CAST(CAST(n AS HUGEINT) AS VARCHAR) ELSE CAST(n AS VARCHAR) END;
+CREATE OR REPLACE TEMP MACRO ps_normkey(s) AS
+  NULLIF(list_transform([lower(ps_cleantext(CAST(s AS VARCHAR)))], lambda c:
+    list_transform([ps_textnum(c)], lambda n:
+      CASE WHEN n IS NOT NULL AND isfinite(n) THEN ps_numtext(n)
+           ELSE regexp_replace(c, ' 00:00:00$', '') END)[1])[1], '');
+"""
+
+_FAMILY = {NUM: "n", STR: "s", BOOL: "b", DATE: "d", TS: "d"}
+# text that ps_normkey would change beyond lower-casing (cheap pre-check)
+_ODD_TEXT = r"'^[\s0-9+.$-]|\s$|\s\s|[^ -~]|00:00:00$'"
+
+
+def exact_eq(a: S, b: S) -> str:
+    """Equality between values of the same kind only (text vs number never matches)."""
+    fa, fb = _FAMILY.get(a.typ), _FAMILY.get(b.typ)
+    if fa is None or fb is None or fa != fb:
+        return "FALSE"
+    return eq_sql(a, b)
+
+
+def norm_key(x: S) -> str:
+    """The canonical text a value is compared by in the normalised tier."""
+    if x.typ == NULL:
+        return "CAST(NULL AS VARCHAR)"
+    if x.typ == NUM:
+        return f"NULLIF({txt(x)}, '')"
+    if x.typ == BOOL:
+        return f"lower({txt(x)})"
+    if x.typ == DATE:
+        return txt(x)
+    if x.typ == TS:
+        return f"regexp_replace({txt(x)}, ' 00:00:00$', '')"
+    return f"ps_normkey({x.sql})"
+
+
+def smart_eq(a: S, b: S) -> str:
+    """Normalised equality (a superset of ``exact_eq``)."""
+    if a.typ == NULL or b.typ == NULL:
+        return "FALSE"
+    fa, fb = _FAMILY.get(a.typ), _FAMILY.get(b.typ)
+    if fa == fb and fa in ("n", "b", "d"):
+        return eq_sql(a, b)
+    col, k = (a, b) if b.is_lit else (b, a)
+    if k.is_lit and not col.is_lit and col.typ == STR:
+        # constant key: only unusual-looking cells pay for full normalisation
+        kk = norm_key(k)
+        return (
+            f"(CASE WHEN regexp_matches({col.sql}, {_ODD_TEXT}) THEN ps_normkey({col.sql}) = {kk} "
+            f"ELSE lower({col.sql}) = {kk} END)"
+        )
+    return f"({norm_key(a)} = {norm_key(b)})"
+
+
 def like_pattern(s: str) -> str:
     out = []
     i = 0
@@ -360,8 +434,51 @@ class Compiler:
         self._bases: dict[Any, Base] = {}
         self.volatile = False
         self.uses_window = False
+        # "smart": lookups/criteria see through format differences; "strict": exact kinds only
+        self.match_mode = getattr(catalog, "match_mode", "smart")
+        # per-row match status of each lookup (0 exact, 1 format-only, NULL none), see _probe
+        self.match_probes: list[str] = []
+        self.notes: list[dict] = []  # e.g. rows FILTER kept only thanks to smart matching
+        self._array_depth = 0  # >0 while compiling inside an array (probes can't run there)
+        # FILTER conditions: "smart" compares normalised values with "=" / "<>", "exact" only
+        # matches values of the same kind (used to count rows kept thanks to smart matching)
+        self._smart_cmp: str | None = None
+        self._smart_hits = 0
 
     # ------------------------------------------------------------ utilities
+
+    @property
+    def smart(self) -> bool:
+        return self.match_mode != "strict"
+
+    def _probe(self, key: S, status_sql: str):
+        """Record a lookup's per-row status: -1 blank key, 0 exact, 1 format-only, NULL not found."""
+        if self._array_depth:
+            return
+        if key.typ == NULL:
+            return
+        blank = f"(nullif(trim({key.sql}), '') IS NULL)" if key.typ == STR else f"({key.sql} IS NULL)"
+        sql = f"(CASE WHEN {blank} THEN -1 ELSE {status_sql} END)"
+        if sql not in self.match_probes:
+            self.match_probes.append(sql)
+
+    def _constify(self, key: S) -> S:
+        """In a single cell, read a referenced lookup key once so the search can use the fast path."""
+        if (
+            self.mode != "cell"
+            or self._array_depth
+            or key.is_lit
+            or key.typ not in (STR, NUM)
+            or self.con is None
+        ):
+            return key
+        try:
+            v = self.query_scalar(f"SELECT {key.sql}")
+        except Exception:
+            return key
+        if v is None or (isinstance(v, (str, int, float)) and not isinstance(v, bool)):
+            return lit_sql(v) if v is not None else S(f"CAST(NULL AS {self._duck_type(key.typ)})", key.typ)
+        return key
 
     def alias(self, prefix: str = "a") -> str:
         return f"{prefix}{next(self._ids)}"
@@ -630,6 +747,13 @@ class Compiler:
         arr_idx = [i for i, a in enumerate(args) if isinstance(a, A)]
         if not arr_idx:
             return fn(*args)
+        self._array_depth += 1
+        try:
+            return self._lift_arrays(fn, args, arr_idx)
+        finally:
+            self._array_depth -= 1
+
+    def _lift_arrays(self, fn, args: list[S | A], arr_idx: list[int]) -> A:
         arrays = [args[i] for i in arr_idx]
         if all(a.inline is not None for a in arrays):
             h = max(len(a.inline) for a in arrays)
@@ -672,11 +796,24 @@ class Compiler:
         op = node.op
         left = self.comp(node.left)
         right = self.comp(node.right)
+        if op in ("=", "<>") and self._smart_cmp:
+            return self.lift(lambda a, b: self._smart_compare(a, b, op), [left, right])
         if op in _CMP:
             return self.lift(lambda a, b: compare(a, b, op), [left, right])
         if op == "&":
             return self.lift(lambda a, b: S(f"({txt0(a)} || {txt0(b)})", STR), [left, right])
         return self.lift(lambda a, b: arith(op, a, b), [left, right])
+
+    def _smart_compare(self, a: S, b: S, op: str) -> S:
+        plain = compare(a, b, "=")
+        if is_empty_str(a) or is_empty_str(b) or a.typ == NULL or b.typ == NULL:
+            return compare(a, b, op)
+        if self._smart_cmp == "exact":
+            e = f"coalesce({exact_eq(a, b)}, FALSE)"
+            return S(e if op == "=" else f"(NOT {e})", BOOL)
+        self._smart_hits += 1
+        e = f"(coalesce({plain.sql}, FALSE) OR coalesce({smart_eq(a, b)}, FALSE))"
+        return S(e if op == "=" else f"(NOT {e})", BOOL)
 
     # ----------------------------------------------------------- reductions
 
@@ -833,6 +970,9 @@ class Compiler:
             t = f"({txt0(x)} ILIKE {sql_str(pat)} ESCAPE '\\')"
             return t if op == "=" else f"(NOT {t})"
         op, val = payload
+        if op in ("=", "<>") and not (val.is_lit and val.lit == "") and val.typ != NULL and self.smart:
+            e = smart_eq(x, val)
+            return f"coalesce({e}, FALSE)" if op == "=" else f"(NOT coalesce({e}, FALSE))"
         if op in ("=", "<>") and not (val.is_lit and val.lit == "") and val.typ != NULL:
             e = eq_sql(x, val)
             if val.typ == STR and x.typ != STR and not (val.is_lit and _NUMERIC_RE.match(str(val.lit))):
@@ -1280,24 +1420,43 @@ class Compiler:
         rows = self.materialize_inline(table)
         if idx is None or idx < 1 or idx > len(rows):
             raise FormulaError("#REF!", "HLOOKUP row index out of range")
-        whens = []
         vals = [rows[idx - 1][j] for j in range(len(rows[0]))]
         t, sqls = unify(vals)
-        for j, k in enumerate(rows[0]):
-            whens.append(f"WHEN coalesce({eq_sql(k, key)}, FALSE) THEN {sqls[j]}")
-        return S(f"(CASE {' '.join(whens)} END)", t)
+        return S(f"(CASE {self._tiered_whens(rows[0], key, sqls)} END)", t)
+
+    def _tiered_whens(self, cells: list[S], key: S, results: list[str]) -> str:
+        """CASE branches for a small inline lookup: exact matches first, then format-only ones."""
+        whens = [
+            f"WHEN coalesce({exact_eq(c, key)}, FALSE) THEN {r}" for c, r in zip(cells, results, strict=True)
+        ]
+        if self.smart:
+            whens += [
+                f"WHEN coalesce({smart_eq(c, key)}, FALSE) THEN {r}"
+                for c, r in zip(cells, results, strict=True)
+            ]
+        return " ".join(whens) or "WHEN FALSE THEN NULL"
 
     def _lookup(self, table: A, kcol: S, vcol: S, key: S, mode: int, last: bool = False) -> S:
         b = table.base
         where = list(b.where)
         if mode == 0:
+            fn = "arg_max" if last else "arg_min"
             if key.is_lit and isinstance(key.lit, str) and ("*" in key.lit or "?" in key.lit):
                 where.append(f"{txt0(kcol)} ILIKE {sql_str(like_pattern(key.lit))} ESCAPE '\\'")
-            else:
-                where.append(eq_sql(kcol, key))
-            fn = "arg_max" if last else "arg_min"
-            w = " AND ".join(where)
-            return S(f"(SELECT {fn}({vcol.sql}, {b.order}) FROM {b.frm} WHERE {w})", vcol.typ)
+                w = " AND ".join(where)
+                return S(f"(SELECT {fn}({vcol.sql}, {b.order}) FROM {b.frm} WHERE {w})", vcol.typ)
+            key = self._constify(key)
+            exact = exact_eq(kcol, key)
+            near = " AND ".join(where + [smart_eq(kcol, key)])
+            self._probe(key, f"(SELECT min(CASE WHEN {exact} THEN 0 ELSE 1 END) FROM {b.frm} WHERE {near})")
+            if not self.smart:
+                w = " AND ".join(where + [exact])
+                return S(f"(SELECT {fn}({vcol.sql}, {b.order}) FROM {b.frm} WHERE {w})", vcol.typ)
+            # exact matches win over format-only ones, then the usual first/last row
+            prio = f"(CASE WHEN {exact} THEN {0 if not last else 1} ELSE {1 if not last else 0} END)"
+            return S(
+                f"(SELECT {fn}({vcol.sql}, {prio} * 1e15 + {b.order}) FROM {b.frm} WHERE {near})", vcol.typ
+            )
         # approximate: greatest key <= lookup value (mode 1) or smallest >= (mode -1)
         cmp = "<=" if mode == 1 else ">="
         if kcol.typ == STR and key.typ == STR:
@@ -1356,10 +1515,9 @@ class Compiler:
     def _match(self, rng: A, key: S, mtype: int) -> S:
         if rng.inline is not None:
             cells = [x for row in rng.inline for x in row]
-            whens = " ".join(
-                f"WHEN coalesce({eq_sql(c, key)}, FALSE) THEN {i + 1}" for i, c in enumerate(cells)
+            return S(
+                f"(CASE {self._tiered_whens(cells, key, [str(i + 1) for i in range(len(cells))])} END)", NUM
             )
-            return S(f"(CASE {whens} END)", NUM)
         col = rng.cols[0]
         b = rng.base
         src = rng.src
@@ -1372,21 +1530,36 @@ class Compiler:
             col = cols[0]
             pos = f"({alias}.__p + {h})"
         where = list(b.where)
+        agg = "min"
+        data = None
         if mtype == 0:
             if key.is_lit and isinstance(key.lit, str) and ("*" in key.lit or "?" in key.lit):
                 where.append(f"{txt0(col)} ILIKE {sql_str(like_pattern(key.lit))} ESCAPE '\\'")
             else:
-                where.append(eq_sql(col, key))
-            agg = "min"
+                key = self._constify(key)
+                exact = exact_eq(col, key)
+                near = " AND ".join(where + [smart_eq(col, key)])
+                self._probe(
+                    key, f"(SELECT min(CASE WHEN {exact} THEN 0 ELSE 1 END) FROM {b.frm} WHERE {near})"
+                )
+                if self.smart:
+                    data = (
+                        f"(SELECT arg_min({pos}, (CASE WHEN {exact} THEN 0 ELSE 1 END) * 1e15 + {pos}) "
+                        f"FROM {b.frm} WHERE {near})"
+                    )
+                else:
+                    where.append(exact)
         else:
             cmp = "<=" if mtype > 0 else ">="
             where.append(compare(col, key, cmp).sql)
             agg = "max"
-        w = " AND ".join(where)
-        data = f"(SELECT {agg}({pos}) FROM {b.frm} WHERE {w})"
+        if data is None:
+            w = " AND ".join(where)
+            data = f"(SELECT {agg}({pos}) FROM {b.frm} WHERE {w})"
         if h and mtype == 0:
             hk = rng.header[0]
-            return S(f"(CASE WHEN coalesce({eq_sql(hk, key)}, FALSE) THEN 1 ELSE {data} END)", NUM)
+            heq = f"({exact_eq(hk, key)} OR {smart_eq(hk, key)})" if self.smart else exact_eq(hk, key)
+            return S(f"(CASE WHEN coalesce({heq}, FALSE) THEN 1 ELSE {data} END)", NUM)
         return S(data, NUM)
 
     def fn_INDEX(self, args):
@@ -1492,6 +1665,35 @@ class Compiler:
 
     def fn_FILTER(self, args):
         self._args(args, 2, None, "FILTER")
+        if not self.smart:
+            return self._filter(args)
+        prev, hits = self._smart_cmp, self._smart_hits
+        self._smart_cmp = "smart"
+        try:
+            res = self._filter(args)
+        finally:
+            self._smart_cmp = prev
+        if self._smart_hits > hits and self.mode == "cell" and not self._array_depth and self.con is not None:
+            # how many rows are in the result only because formats were normalised?
+            try:
+                self._smart_cmp = "exact"
+                strict = self._filter(args)
+                n_smart = self.query_scalar(self._count_rows(res))
+                n_strict = self.query_scalar(self._count_rows(strict))
+                if n_smart and n_strict is not None and n_smart > n_strict:
+                    self.notes.append({"fn": "FILTER", "fuzzy": int(n_smart - n_strict)})
+            except Exception:
+                pass
+            finally:
+                self._smart_cmp = prev
+        return res
+
+    @staticmethod
+    def _count_rows(a: A) -> str:
+        b = a.base
+        return f"SELECT count(*) FROM {b.frm} WHERE {' AND '.join(b.where) or 'TRUE'}"
+
+    def _filter(self, args):
         data = self.comp(args[0])
         conds = [self.comp(a) for a in args[1:]]
         if not isinstance(data, A):
@@ -2057,6 +2259,7 @@ SCALAR_FUNCS: dict[str, tuple[int, int | None, Any]] = {
     "N": (1, 1, lambda x: S(num(x) if x.typ in (NUM, BOOL, DATE, TS) else "CAST(0 AS DOUBLE)", NUM)),
     "VALUE": (1, 1, lambda x: S(_value(x), NUM)),
     "TO_TEXT": (1, 1, lambda x: S(txt(x), STR)),
+    "CLEANKEY": (1, 1, lambda x: S(f"coalesce({norm_key(x)}, '')" if x.typ != NULL else "''", STR)),
     # text
     "TRIM": (1, 1, _t(lambda x: f"trim(regexp_replace({txt(x)}, '\\s+', ' ', 'g'))")),
     "CLEAN": (1, 1, _t(lambda x: f"regexp_replace({txt(x)}, '[\\x00-\\x1F]', '', 'g')")),

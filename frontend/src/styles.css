@@ -3450,3 +3450,86 @@ select:focus,
     display: none;
   }
 }
+
+/* ---------------------------------------------------------------- key match check */
+.match-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.match-dialog section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.match-dialog h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+.match-dialog p {
+  margin: 0;
+}
+.match-table {
+  max-height: 220px;
+}
+.match-table table {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+}
+.match-table th,
+.match-table td {
+  border-bottom: 1px solid var(--grid-line);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: middle;
+}
+.match-table th {
+  background: var(--row0-bg);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+}
+.match-table td:not(:first-child) {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.match-table td.warn {
+  color: var(--warning);
+  font-weight: 600;
+}
+.match-table code {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.match-pick {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.match-pick .field {
+  flex: 1 1 220px;
+}
+.match-pick .row-gap {
+  display: flex;
+  gap: 6px;
+}
+.match-pick select {
+  flex: 1;
+  min-width: 0;
+}
+.match-report,
+.match-health,
+.match-fix {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.match-fix {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  align-items: flex-start;
+}

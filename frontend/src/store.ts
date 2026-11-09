@@ -3,7 +3,7 @@ import { rpc, RpcError } from "./api";
 import type { CellInfo, Rect, Selection, SheetInfo, Stats, WorkbookInfo } from "./types";
 
 export type PanelKind = "pivot" | "cf" | "dv" | "dups" | "profile" | "clean";
-export type DialogKind = "import" | "export" | "sql" | "shortcuts" | "about" | "split" | "google" | "docs";
+export type DialogKind = "import" | "export" | "sql" | "shortcuts" | "about" | "split" | "google" | "docs" | "match";
 
 export interface ScriptLine {
   t: number;
@@ -36,6 +36,7 @@ export interface Clip {
   c2: number;
   cut: boolean;
   text: string;
+  token?: string; // copied from a filtered view: the engine remembers exactly which rows
 }
 
 export interface MenuItem {

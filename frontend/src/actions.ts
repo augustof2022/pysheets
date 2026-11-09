@@ -50,6 +50,30 @@ export function selectionRects(): Rect[] {
   return get().sel.ranges.map(toSheetRect);
 }
 
+/** True while the current sheet shows a filtered view (edits must then skip hidden rows). */
+export function isFiltered(): boolean {
+  return !!currentSheet()?.filtered;
+}
+
+/** A visual rectangle clamped to the filtered view (rows beyond the last visible row dropped). */
+export function viewRect(rect: Rect): Rect {
+  const sh = currentSheet();
+  return { r1: rect.r1, c1: rect.c1, r2: Math.min(rect.r2, sh?.nview ?? rect.r2), c2: Math.min(rect.c2, (sh?.ncols ?? 26) + 50) };
+}
+
+/**
+ * Rectangles for range commands.  On a filtered sheet they stay in visual rows and carry
+ * ``view: true`` so the engine applies the command to the visible rows only.
+ */
+export function rectsParam(): { rects: number[][]; view?: boolean } {
+  if (isFiltered()) return { rects: get().sel.ranges.map(viewRect).map((r) => [r.r1, r.c1, r.r2, r.c2]), view: true };
+  return { rects: selectionRects().map((r) => [r.r1, r.c1, r.r2, r.c2]) };
+}
+
+function visibleNote(n: number | undefined, what: string) {
+  if (n) toast(`${what} ${n.toLocaleString()} visible row${n === 1 ? "" : "s"} · hidden rows untouched`);
+}
+
 function sheetId(): string {
   return currentSheet()!.id;
 }
@@ -129,20 +153,50 @@ export async function commitEdit(move: "down" | "up" | "right" | "left" | null =
   if (unchanged || row < 0) return true;
   // optimistic paint for plain values
   if (grid && !ed.text.startsWith("=")) optimistic(ed.r, ed.c, ed.text);
+  if (fill === "column" && sh.filtered) {
+    // only the rows the filter shows get the formula
+    await call("cell.set", { sheet: sh.id, row, col: ed.c, value: ed.text });
+    await fillVisible(ed.r, ed.c);
+    return true;
+  }
   const res = await call("cell.set", { sheet: sh.id, row, col: ed.c, value: ed.text, fill });
   invalidate();
   refreshCell();
+  if (res !== undefined && ed.text.startsWith("=")) lookupToast(sh.id, row, ed.c);
   if (res !== undefined && ed.text.startsWith("=") && !fill && row >= 1 && suggestFill(ed.text, ed.r, row)) {
     const isCol = sh.formulas.some((f) => f.kind === "column" && f.col === ed.c && f.row <= row);
     if (!isCol) {
       dismissFillToasts();
-      toast("Apply this formula to the whole column?", "info", {
-        label: "Fill column ⌃↵",
-        run: () => call("cell.set", { sheet: sh.id, row, col: ed.c, value: ed.text, fill: "column" }).then(invalidate),
+      toast(sh.filtered ? "Apply this formula to the visible rows below?" : "Apply this formula to the whole column?", "info", {
+        label: sh.filtered ? "Fill visible ⌃↵" : "Fill column ⌃↵",
+        run: () => (sh.filtered ? fillVisible(ed.r, ed.c) : call("cell.set", { sheet: sh.id, row, col: ed.c, value: ed.text, fill: "column" }).then(invalidate)),
       });
     }
   }
   return true;
+}
+
+/**
+ * After a lookup formula runs, say how its keys matched so a blank result can be trusted:
+ * format-only matches (text vs number, spaces, zeros…) are called out with a way to review them.
+ */
+export function lookupToast(sheet: string, row: number, col: number) {
+  const sh = get().info?.sheets.find((s) => s.id === sheet);
+  const f = sh?.formulas.find((x) => x.col === col && (x.row === row || (x.kind === "column" && x.row <= row && (x.row_end ?? Infinity) >= row)));
+  const m = f?.match;
+  if (!f || !m) return;
+  const fuzzy = m.fuzzy + (m.filter_fuzzy ?? 0);
+  const n = (x: number) => x.toLocaleString();
+  if (fuzzy) {
+    const what = m.filter_fuzzy && !m.fuzzy ? `${n(fuzzy)} row(s) kept` : `${n(fuzzy)} key(s) matched`;
+    const text =
+      m.mode === "strict"
+        ? `${n(m.fuzzy)} key(s) have no exact match but exist with a different format (text vs number, spaces, zeros…)`
+        : `${what} only after fixing a format difference (text vs number, spaces, zeros…)${m.missing ? ` · ${n(m.missing)} not found` : ""}`;
+    toast(text, "info", { label: "Review", run: () => openDialog("match", { formula: f.id }) });
+  } else if (m.missing && f.kind === "column") {
+    toast(`${n(m.exact)} matched · ${n(m.missing)} not found — no format mismatches, these keys are really missing`);
+  }
 }
 
 /** Sheets-style autofill hint: the formula reads a cell on its own row and that column continues below. */
@@ -181,9 +235,11 @@ export async function copySelection(cut = false) {
   const sh = currentSheet();
   if (!sh) return;
   const rect = toSheetRect(primaryRect());
-  const res = await query<{ tsv: string }>("range.text", { sheet: sh.id, ...rect });
+  const filtered = !!sh.filtered;
+  const vr = viewRect(primaryRect());
+  const res = await query<{ tsv: string; rows: number; token?: string }>("range.text", filtered ? { sheet: sh.id, ...vr, view: true } : { sheet: sh.id, ...rect });
   if (!res) return;
-  set({ clip: { sheet: sh.id, ...rect, cut, text: res.tsv } });
+  set({ clip: { sheet: sh.id, ...(filtered ? vr : rect), cut, text: res.tsv, token: filtered ? res.token : undefined } });
   if (grid) {
     grid.copyRect = primaryRect();
     grid.invalidateDraw();
@@ -199,33 +255,47 @@ export async function copySelection(cut = false) {
     ta.remove();
     grid?.focus();
   }
-  const cells = (rect.r2 - rect.r1 + 1) * (rect.c2 - rect.c1 + 1);
-  if (cells > 1) toast(`${cut ? "Cut" : "Copied"} ${cells.toLocaleString()} cells`);
+  const cells = (filtered ? res.rows : rect.r2 - rect.r1 + 1) * (rect.c2 - rect.c1 + 1);
+  if (cells > 1) toast(`${cut ? "Cut" : "Copied"} ${cells.toLocaleString()} cells${filtered ? " (visible rows only)" : ""}`);
 }
 
 export async function pasteText(text: string) {
   const sh = currentSheet();
   if (!sh) return;
   const { clip, sel } = get();
-  const row = sheetRow(sel.active.r);
+  const filtered = !!sh.filtered;
+  // on a filtered view the target is the active *visual* row; lines go to visible rows only
+  const row = filtered ? sel.active.r : sheetRow(sel.active.r);
   const col = sel.active.c;
   if (clip && normalizeNl(clip.text) === normalizeNl(text)) {
-    await call("range.paste", { sheet: sh.id, src: { sheet: clip.sheet, r1: clip.r1, c1: clip.c1, r2: clip.r2, c2: clip.c2 }, row, col });
+    const res = await call<{ skipped?: number; rows?: number }>("range.paste", {
+      sheet: sh.id,
+      src: { sheet: clip.sheet, r1: clip.r1, c1: clip.c1, r2: clip.r2, c2: clip.c2, token: clip.token },
+      row,
+      col,
+      view: filtered,
+    });
+    skippedNote(res?.skipped);
     if (clip.cut) {
-      await call("range.clear", { sheet: clip.sheet, r1: clip.r1, c1: clip.c1, r2: clip.r2, c2: clip.c2, what: "all" });
+      await call("range.clear", { sheet: clip.sheet, r1: clip.r1, c1: clip.c1, r2: clip.r2, c2: clip.c2, what: "all", token: clip.token });
       set({ clip: null });
       if (grid) grid.copyRect = null;
     }
   } else {
     const rows = parseTsv(text);
     if (!rows.length) return;
-    await call("range.set", { sheet: sh.id, row, col, values: rows }, { label: "Pasting" });
+    const res = await call<{ skipped?: number }>("range.set", { sheet: sh.id, row, col, values: rows, view: filtered }, { label: "Pasting" });
+    skippedNote(res?.skipped);
     if (rows.length > 1 || rows[0].length > 1) {
       grid?.selectRect({ r1: sel.active.r, c1: col, r2: sel.active.r + rows.length - 1, c2: col + Math.max(...rows.map((r) => r.length)) - 1 });
     }
   }
   invalidate();
   refreshCell();
+}
+
+function skippedNote(n: number | undefined) {
+  if (n) toast(`Pasted into the visible rows; ${n.toLocaleString()} line${n === 1 ? " didn't" : "s didn't"} fit and ${n === 1 ? "was" : "were"} not pasted`, "error");
 }
 
 function normalizeNl(s: string) {
@@ -270,14 +340,31 @@ export function parseTsv(text: string): string[][] {
 export async function clearSelection(what: "contents" | "formats" | "all" = "contents") {
   const sh = currentSheet();
   if (!sh) return;
-  for (const r of selectionRects()) {
-    await call("range.clear", { sheet: sh.id, ...r, what });
+  if (sh.filtered) {
+    let n = 0;
+    for (const r of get().sel.ranges.map(viewRect)) {
+      const res = await call<{ rows?: number }>("range.clear", { sheet: sh.id, ...r, what, view: true });
+      n += res?.rows ?? 0;
+    }
+    if (n > 1) visibleNote(n, "Cleared");
+  } else {
+    for (const r of selectionRects()) {
+      await call("range.clear", { sheet: sh.id, ...r, what });
+    }
   }
   invalidate();
   refreshCell();
 }
 
 export async function fillRange(src: Rect, dst: Rect) {
+  if (isFiltered()) {
+    const s = viewRect(src);
+    const d = viewRect(dst);
+    await call("range.fill", { sheet: sheetId(), src: [s.r1, s.c1, s.r2, s.c2], dst: [d.r1, d.c1, d.r2, d.c2], view: true }, { label: "Filling visible rows" });
+    invalidate();
+    refreshCell();
+    return;
+  }
   const s = toSheetRect(src);
   const d = toSheetRect(dst);
   await call("range.fill", { sheet: sheetId(), src: [s.r1, s.c1, s.r2, s.c2], dst: [d.r1, d.c1, d.r2, d.c2] }, { label: "Filling" });
@@ -285,10 +372,28 @@ export async function fillRange(src: Rect, dst: Rect) {
   refreshCell();
 }
 
+/** Fill from visual row ``r`` down to the last visible row (filtered views only). */
+async function fillVisible(r: number, c: number, r2 = r) {
+  const sh = currentSheet();
+  if (!sh) return;
+  const last = sh.nview;
+  if (last <= r2) return;
+  await call("range.fill", { sheet: sh.id, src: [r, c, r2, c], dst: [r, c, last, c], view: true }, { label: "Filling visible rows" });
+  toast("Filled the visible rows · hidden rows untouched");
+  invalidate();
+  refreshCell();
+  lookupToast(sh.id, sheetRow(r), c);
+}
+
 export async function fillColumn() {
   const sh = currentSheet();
   const { cell, sel } = get();
   if (!sh) return;
+  if (sh.filtered) {
+    const p = viewRect(primaryRect());
+    for (let c = p.c1; c <= p.c2; c++) await fillVisible(p.r1, c, p.r2);
+    return;
+  }
   const row = sheetRow(sel.active.r);
   if (cell && cell.input.startsWith("=") && row >= 1) {
     await call("cell.set", { sheet: sh.id, row, col: sel.active.c, value: cell.input, fill: "column" }, { label: "Filling column" });
@@ -311,13 +416,21 @@ export async function fillDown() {
 
 export async function insertRows(where: "above" | "below") {
   const rect = toSheetRect(primaryRect());
-  const n = rect.r2 - rect.r1 + 1;
+  const vr = viewRect(primaryRect());
+  const n = isFiltered() ? vr.r2 - vr.r1 + 1 : rect.r2 - rect.r1 + 1;
   const row = where === "above" ? Math.max(1, rect.r1) : rect.r2 + 1;
   await call("rows.insert", { sheet: sheetId(), row, count: Math.min(n, 10000) }, { label: "Inserting rows" });
   invalidate();
 }
 
 export async function deleteRows() {
+  if (isFiltered()) {
+    const vr = viewRect(primaryRect());
+    const res = await call<{ deleted?: number }>("rows.delete", { sheet: sheetId(), r1: Math.max(1, vr.r1), r2: vr.r2, view: true }, { label: "Deleting visible rows" });
+    visibleNote(res?.deleted, "Deleted");
+    invalidate();
+    return;
+  }
   const rect = toSheetRect(primaryRect());
   await call("rows.delete", { sheet: sheetId(), r1: Math.max(1, rect.r1), r2: rect.r2 }, { label: "Deleting rows" });
   invalidate();
@@ -362,8 +475,7 @@ export async function setFilter(col: number, spec: unknown) {
 }
 
 export async function applyStyle(patch: CellStyle) {
-  const rects = selectionRects().map((r) => [r.r1, r.c1, r.r2, r.c2]);
-  await call("style.set", { sheet: sheetId(), rects, patch });
+  await call("style.set", { sheet: sheetId(), ...rectsParam(), patch });
   grid?.invalidateDraw();
 }
 
@@ -383,8 +495,7 @@ export function currentStyle(): CellStyle {
 }
 
 export async function applyBorders(mode: string, line = "thin", color = "#1f2937") {
-  const rects = selectionRects().map((r) => [r.r1, r.c1, r.r2, r.c2]);
-  await call("style.borders", { sheet: sheetId(), rects, mode, line, color });
+  await call("style.borders", { sheet: sheetId(), ...rectsParam(), mode, line, color });
   grid?.invalidateDraw();
 }
 
@@ -415,7 +526,8 @@ export async function setNumberFormat(fmt: string | null) {
   const rects = selectionRects();
   const sh = currentSheet();
   if (!sh) return;
-  const wholeCols = rects.every((r) => r.r1 <= 1 && r.r2 >= sh.nrows);
+  // a filtered view formats only its visible rows, never the whole column
+  const wholeCols = !sh.filtered && rects.every((r) => r.r1 <= 1 && r.r2 >= sh.nrows);
   if (wholeCols) {
     const cols: number[] = [];
     for (const r of rects) for (let c = r.c1; c <= Math.min(r.c2, sh.ncols - 1); c++) cols.push(c);

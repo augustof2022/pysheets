@@ -25,6 +25,7 @@ from ..formula.compiler import (
     sql_str,
     txt,
 )
+from ..formula.refs import col_to_letters
 from .model import Column, Sheet
 from .values import duck_literal, to_json
 from .workbook import EngineError, Workbook, merge_duck, q
@@ -1081,6 +1082,7 @@ def transform_text(wb: Workbook, sheet_id: str, rects: list[list[int]], op: str)
     scope = [(sh.id, "table")]
     wb._begin("Clean up text", scope)
     changed = 0
+    regions = []
     for r1, c1, r2, c2 in rects:
         lo, hi = max(r1, 1) - 1, min(r2, sh.nrows) - 1
         for c in sh.columns[c1 : min(c2, len(sh.columns) - 1) + 1]:
@@ -1102,7 +1104,8 @@ def transform_text(wb: Workbook, sheet_id: str, rects: list[list[int]], op: str)
             if n:
                 wb.con.execute(f"UPDATE {q(sh.table)} SET {q(c.id)} = {e} WHERE __rid BETWEEN {lo} AND {hi}")
                 changed += n
-        wb.recalc([(sh.id, c1, c2, r1, r2)])
+        regions.append((sh.id, c1, c2, r1, r2))
+    wb.recalc(regions)
     wb._touch(sh)
     return {"changed": changed}
 
@@ -1388,3 +1391,231 @@ def column_profile(wb: Workbook, sheet_id: str, col: int) -> dict:
         "top": [[a, b] for a, b in top],
         "type": c.typ,
     }
+
+
+# ----------------------------------------------------- key matching diagnostics
+
+_FAMILY_LABEL = {NUM: "Number", STR: "Text", BOOL: "TRUE/FALSE", DATE: "Date", TS: "Date & time"}
+_INVISIBLE_RE = (
+    r"'[\x{200B}-\x{200D}\x{2060}\x{FEFF}\x{00AD}\x{00A0}\x{2000}-\x{200A}\x{202F}\x{205F}\x{3000}[:cntrl:]]'"
+)
+
+
+def _exact_key(x: S) -> str:
+    """Value used for exact (same-kind) comparison, mirroring compiler.exact_eq."""
+    if x.typ == STR:
+        return f"lower({x.sql})"
+    if x.typ in (DATE, TS):
+        return f"CAST({x.sql} AS TIMESTAMP)"
+    return x.sql
+
+
+def _family(typ: str) -> str:
+    return {DATE: "d", TS: "d"}.get(typ, typ)
+
+
+def _column_health(wb: Workbook, sh: Sheet, c: Column) -> dict:
+    """How messy a key column is: numbers stored as text, stray spaces, invisible characters."""
+    x = q(c.id)
+    s = txt(S(x, c.typ))
+    num_text = (
+        f"count(*) FILTER (WHERE ps_textnum(lower(ps_cleantext({x}))) IS NOT NULL)" if c.typ == STR else "0"
+    )
+    row = wb.con.execute(
+        f"SELECT count({x}), {num_text}, "
+        f"count(*) FILTER (WHERE {s} <> trim({s}) OR contains({s}, '  ')), "
+        f"count(*) FILTER (WHERE regexp_matches({s}, {_INVISIBLE_RE})), "
+        f"count(*) FILTER (WHERE {x} IS NOT NULL AND ps_normkey({s}) IS NULL) "
+        f"FROM {q(sh.table)}"
+    ).fetchone()
+    filled, numeric_text, spaces, invisible, empty = row
+    return {
+        "sheet": sh.id,
+        "sheet_name": sh.name,
+        "col": sh.columns.index(c),
+        "name": c.name,
+        "type": _FAMILY_LABEL.get(c.typ, "Text"),
+        "filled": filled,
+        "numbers_as_text": numeric_text,
+        "all_numeric": c.typ == NUM
+        or (c.typ == STR and filled - empty > 0 and numeric_text == filled - empty),
+        "spaces": spaces,
+        "invisible": invisible,
+        "whitespace_only": empty,
+    }
+
+
+def match_report(wb: Workbook, sheet_a: str, col_a: int, sheet_b: str, col_b: int, samples: int = 25) -> dict:
+    """Compare the keys of column A (the values you look up) with column B (where you look
+    them up): which match exactly, which match only once formats are normalised (and why),
+    and which are genuinely missing."""
+    sa_sh, sb_sh = wb.sheet(sheet_a), wb.sheet(sheet_b)
+    if col_a >= len(sa_sh.columns) or col_b >= len(sb_sh.columns):
+        raise EngineError("Pick a column that exists")
+    ca, cb = sa_sh.columns[col_a], sb_sh.columns[col_b]
+    xa, xb = S("a.v", ca.typ), S("b.v", cb.typ)
+    same_kind = _family(ca.typ) == _family(cb.typ)
+    exact_b = f"(SELECT DISTINCT {_exact_key(xb)} AS e FROM bb AS b WHERE b.v IS NOT NULL)"
+    is_exact = f"({_exact_key(xa)} IN (SELECT e FROM ex))" if same_kind else "FALSE"
+    tmp = f"__mr{next(wb._tmp)}"
+    wb.con.execute(
+        f"CREATE OR REPLACE TEMP TABLE {tmp} AS "
+        f"WITH bb AS (SELECT __rid AS rid, {q(cb.id)} AS v FROM {q(sb_sh.table)}), "
+        f"ex AS {exact_b}, "
+        f"bk AS (SELECT ps_normkey({txt(xb)}) AS k, arg_min({txt(xb)}, b.rid) AS s, min(b.rid) AS rid "
+        f"       FROM bb AS b WHERE b.v IS NOT NULL GROUP BY 1) "
+        f"SELECT a.rid, {txt(xa)} AS sa, ps_normkey({txt(xa)}) AS k, {is_exact} AS exact, "
+        f"bk.s AS sb, bk.rid AS brid "
+        f"FROM (SELECT __rid AS rid, {q(ca.id)} AS v FROM {q(sa_sh.table)}) AS a "
+        f"LEFT JOIN bk ON bk.k = ps_normkey({txt(xa)}) "
+        f"WHERE a.v IS NOT NULL AND ps_normkey({txt(xa)}) IS NOT NULL"
+    )
+    try:
+        reasons_sql = {
+            "type": "FALSE" if same_kind else "TRUE",
+            "invisible": f"regexp_matches(sa || sb, {_INVISIBLE_RE})",
+            "spaces": "(sa <> trim(sa) OR sb <> trim(sb) OR contains(sa, '  ') OR contains(sb, '  '))",
+            "zeros": "(regexp_matches(sa, '^\\s*[+-]?0\\d') OR regexp_matches(sb, '^\\s*[+-]?0\\d'))",
+            "separators": "(contains(sa, ',') OR contains(sb, ',') OR regexp_matches(sa || sb, '[$€£¥]'))",
+            "decimals": "(regexp_matches(sa, '\\.\\d*$|e[+-]?\\d', 'i') OR regexp_matches(sb, '\\.\\d*$|e[+-]?\\d', 'i'))",
+        }
+        fuzzy = "(NOT exact AND brid IS NOT NULL)"
+        sel = ", ".join(f"count(*) FILTER (WHERE {fuzzy} AND {e})" for e in reasons_sql.values())
+        any_reason = " OR ".join(f"({e})" for e in reasons_sql.values())
+        row = wb.con.execute(
+            f"SELECT count(*), count(*) FILTER (WHERE exact), count(*) FILTER (WHERE {fuzzy}), "
+            f"count(*) FILTER (WHERE NOT exact AND brid IS NULL), "
+            f"count(*) FILTER (WHERE {fuzzy} AND NOT ({any_reason})), {sel} FROM {tmp}"
+        ).fetchone()
+        total, n_exact, n_fuzzy, n_missing, n_other = row[:5]
+        reasons = dict(zip(reasons_sql, row[5:], strict=True))
+        reasons["other"] = n_other
+        label = " ".join(f"WHEN {e} THEN '{k}'" for k, e in reasons_sql.items())
+        fz = wb.con.execute(
+            f"SELECT rid + 1, sa, brid + 1, sb, CASE {label} ELSE 'other' END FROM {tmp} "
+            f"WHERE {fuzzy} ORDER BY rid LIMIT {int(samples)}"
+        ).fetchall()
+        miss = wb.con.execute(
+            f"SELECT rid + 1, sa FROM {tmp} WHERE NOT exact AND brid IS NULL ORDER BY rid LIMIT {int(samples)}"
+        ).fetchall()
+    finally:
+        wb.con.execute(f"DROP TABLE IF EXISTS {tmp}")
+    ha, hb = _column_health(wb, sa_sh, ca), _column_health(wb, sb_sh, cb)
+    suggest = "number" if ha["all_numeric"] and hb["all_numeric"] else "text"
+    return {
+        "a": ha,
+        "b": hb,
+        "total": total,
+        "exact": n_exact,
+        "fuzzy": n_fuzzy,
+        "missing": n_missing,
+        "reasons": reasons,
+        "fuzzy_samples": [
+            {"row": r, "value": a, "b_row": br, "b_value": b, "reason": why} for r, a, br, b, why in fz
+        ],
+        "missing_samples": [{"row": r, "value": a} for r, a in miss],
+        "suggest": suggest,
+    }
+
+
+def normalize_columns(
+    wb: Workbook, targets: list[dict], to: str = "auto", keep_original: bool = False
+) -> dict:
+    """Make key columns consistent so exact matching works: remove invisible characters,
+    trim and collapse spaces, and store every value as the same kind (number or text).
+    Values are kept - "00123" becomes the number 123 only when converting to numbers."""
+    if to not in ("auto", "number", "text"):
+        raise EngineError("Convert to number, text or auto")
+    resolved = []
+    for t in targets:
+        sh = wb.sheet(t["sheet"])
+        if t["col"] >= len(sh.columns):
+            raise EngineError("Pick a column that exists")
+        c = sh.columns[t["col"]]
+        if any(f.sheet_id == sh.id and f.col_id == c.id for f in wb.formulas.values()):
+            raise EngineError(
+                f"Column {c.name or col_to_letters(t['col'])} on {sh.name} has formulas; normalise its source data instead"
+            )
+        resolved.append((sh, c))
+    if not resolved:
+        return {"columns": []}
+    # decide the target kind once for all columns so they end up comparable
+    if to == "auto":
+        healths = [_column_health(wb, sh, c) for sh, c in resolved]
+        to = "number" if all(h["all_numeric"] for h in healths) else "text"
+    if to == "number":
+        for sh, c in resolved:
+            if c.typ == NUM:
+                continue
+            x = q(c.id)
+            bad = wb.con.execute(
+                f"SELECT count(*), any_value({txt(S(x, c.typ))}) FROM {q(sh.table)} WHERE {x} IS NOT NULL "
+                f"AND ps_normkey({txt(S(x, c.typ))}) IS NOT NULL "
+                f"AND ps_textnum(lower(ps_cleantext({txt(S(x, c.typ))}))) IS NULL"
+            ).fetchone()
+            if bad[0]:
+                raise EngineError(
+                    f"{c.name or 'This column'} on {sh.name} has {bad[0]:,} value(s) that aren't numbers "
+                    f"(e.g. {bad[1]!r}); convert to text instead"
+                )
+    scopes = list(dict.fromkeys((sh.id, "table") for sh, _ in resolved))
+    wb._begin("Normalise keys", scopes)
+    out = []
+    for sh, c in resolved:
+        col = sh.columns.index(c)
+        x = q(c.id)
+        s = txt(S(x, c.typ))
+        cleaned = f"NULLIF(ps_cleantext({s}), '')"
+        if to == "text" and c.typ == STR:
+            # numeric-looking text loses thousands separators / currency ("1,234" → "1234");
+            # leading zeros stay, so codes like "00123" are kept as written
+            cleaned = (
+                f"(CASE WHEN ps_textnum(lower({cleaned})) IS NOT NULL "
+                f"THEN regexp_replace({cleaned}, '[,$€£¥]', '', 'g') ELSE {cleaned} END)"
+            )
+        kind = NUM if to == "number" else STR
+        if c.typ != kind:
+            changed = wb.con.execute(f"SELECT count({x}) FROM {q(sh.table)}").fetchone()[0]
+        else:
+            changed = (
+                0
+                if kind == NUM
+                else wb.con.execute(
+                    f"SELECT count(*) FROM {q(sh.table)} WHERE {x} IS DISTINCT FROM {cleaned}"
+                ).fetchone()[0]
+            )
+        if changed and keep_original:
+            _copy_column_to_end(wb, sh, col, f"{c.name or col_to_letters(col)} (original)")
+        if c.typ != kind:
+            using = f"ps_textnum(lower({cleaned}))" if kind == NUM else cleaned
+            duck = "DOUBLE" if kind == NUM else "VARCHAR"
+            wb.con.execute(f"ALTER TABLE {q(sh.table)} ALTER {x} TYPE {duck} USING {using}")
+            c.duck = duck
+        elif changed:
+            wb.con.execute(f"UPDATE {q(sh.table)} SET {x} = {cleaned} WHERE {x} IS DISTINCT FROM {cleaned}")
+        out.append({"sheet": sh.id, "col": col, "name": c.name, "changed": changed, "type": to})
+    for sh, c in resolved:
+        col = sh.columns.index(c)
+        wb.recalc([(sh.id, col, col, 0, None)])
+        wb._touch(sh)
+    return {"columns": out, "type": to}
+
+
+def _copy_column_to_end(wb: Workbook, sh: Sheet, col: int, name: str) -> int:
+    """Copy column ``col`` into the first free column after the used area (inside the caller's
+    undo step).  Nothing is inserted, so no existing reference or VLOOKUP index shifts."""
+    src = sh.columns[col]
+    used = {f.col_id for f in wb.formulas.values() if f.sheet_id == sh.id}
+    counts = wb.con.execute(
+        f"SELECT {', '.join(f'count({q(c.id)})' for c in sh.columns)} FROM {q(sh.table)}"
+    ).fetchone()
+    last = max(
+        (i for i, c in enumerate(sh.columns) if c.name or counts[i] or c.id in used or c.linked), default=-1
+    )
+    dest = last + 1
+    wb._ensure_cols(sh, dest)
+    d = sh.columns[dest]
+    wb._retype(sh, d, src.duck, clear=True)
+    wb.con.execute(f"UPDATE {q(sh.table)} SET {q(d.id)} = {q(src.id)}")
+    d.name, d.fmt, d.width = name, src.fmt, max(d.width, src.width)
+    return dest

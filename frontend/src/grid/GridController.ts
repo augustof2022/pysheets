@@ -45,6 +45,7 @@ export interface GridTheme {
   shadow: string;
   spill: string;
   invalid: string;
+  warning: string;
   refColors: string[];
   checkbox: string;
   findFill: string;
@@ -1383,6 +1384,7 @@ export class GridController {
     let italic = st?.italic;
     let strike = st?.strike;
     let invalid = false;
+    let mismatch = false;
     let scaleColor: string | null = null;
     const flags = r > 0 ? this.flagsAt(r, c) : undefined;
     if (flags) {
@@ -1399,6 +1401,7 @@ export class GridController {
         } else if (f[2] === "scale") {
           scaleColor = scaleAt(cfRules[f[4]]?.colors || ["#f8d0cf", "#fff3c4", "#c7ecd6"], Number(f[3]));
         } else if (f[2] === "invalid") invalid = true;
+        else if (f[2] === "fmt") mismatch = true;
       }
     }
     if (scaleColor) bg = scaleColor;
@@ -1470,6 +1473,15 @@ export class GridController {
       if (strike) ctx.fillRect(tx, ty - 0.5, tw, 1);
       if (st?.underline) ctx.fillRect(tx, ty + 6.5, tw, 1);
       if (needsClip) ctx.restore();
+    }
+    if (mismatch) {
+      // lookup matched only after normalising formats (text vs number, spaces, zeros…)
+      ctx.fillStyle = t.warning;
+      ctx.beginPath();
+      ctx.moveTo(x + 1, y + 1);
+      ctx.lineTo(x + 8, y + 1);
+      ctx.lineTo(x + 1, y + 8);
+      ctx.fill();
     }
     if (invalid) {
       ctx.fillStyle = t.invalid;
