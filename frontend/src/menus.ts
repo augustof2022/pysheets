@@ -1,5 +1,5 @@
 import * as A from "./actions";
-import { exportDialog, newWorkbook, openFile, saveWorkbook, saveWorkbookAs } from "./fileops";
+import { exportDialog, newWorkbook, openFile, openPySheetsFolder, saveWorkbook, saveWorkbookAs } from "./fileops";
 import { enableScripts, openScripts, runScript } from "./scripts";
 import { colLetters } from "./format";
 import type { Hit } from "./grid/GridController";
@@ -152,6 +152,8 @@ export const TOP_MENUS: TopMenu[] = [
       { label: "Save as…", icon: "save", shortcut: `${MOD}+Shift+S`, run: () => saveWorkbookAs() },
       { divider: true },
       { label: "Export…", icon: "download", shortcut: `${MOD}+Shift+E`, run: () => exportDialog() },
+      { divider: true },
+      { label: "Open PySheets folder", icon: "folder-open", run: () => openPySheetsFolder() },
     ],
   },
   {

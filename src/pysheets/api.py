@@ -117,7 +117,10 @@ def _open(wb, p):
 def _save(wb, p):
     path = p.get("path") or wb.path
     if not path:
-        raise EngineError("Choose where to save the workbook")
+        # no location chosen (e.g. browser mode): save into Documents/PySheets
+        from .paths import safe_name, unique_path, workbooks_dir
+
+        path = str(unique_path(workbooks_dir(), safe_name(wb.title) + ".pysheets"))
     if not path.lower().endswith(".pysheets"):
         path += ".pysheets"
     return IO.save_workbook(wb, path)
@@ -453,6 +456,29 @@ def _io_temp(wb, p):
 # ----------------------------------------------------------------- dialogs
 
 
+@rpc("paths.folders", mutates=False, lock=False)
+def _paths_folders(wb, p):
+    from .paths import exports_dir, workbooks_dir
+
+    return {"workbooks": str(workbooks_dir()), "exports": str(exports_dir())}
+
+
+@rpc("paths.reveal", mutates=False, lock=False)
+def _paths_reveal(wb, p):
+    """Show the PySheets folder (or a saved file) in Explorer."""
+    from pathlib import Path
+
+    from .paths import exports_dir, reveal, workbooks_dir
+
+    target = p.get("path")
+    if target == "exports":
+        target = exports_dir()
+    elif not target:
+        target = workbooks_dir()
+    reveal(Path(target))
+    return {"path": str(target)}
+
+
 @rpc("dialog.open", mutates=False, lock=False)
 def _dialog_open(wb, p):
     ctx = p.get("__ctx") or {}
@@ -469,10 +495,13 @@ def _dialog_open(wb, p):
             "All files (*.*)",
         )
     )
+    from .paths import workbooks_dir
+
     res = win.create_file_dialog(
         getattr(webview, "FileDialog", webview).OPEN
         if hasattr(webview, "FileDialog")
         else webview.OPEN_DIALOG,
+        directory=str(p.get("directory") or workbooks_dir()),
         allow_multiple=bool(p.get("multiple")),
         file_types=types,
     )
@@ -500,10 +529,16 @@ def _dialog_save(wb, p):
         return {"unsupported": True}
     import webview
 
+    from .paths import exports_dir, workbooks_dir
+
+    name = p.get("name") or "export.xlsx"
+    # workbooks live in Documents/PySheets, exports in Documents/PySheets/Exports
+    folder = p.get("directory") or (workbooks_dir() if name.lower().endswith(".pysheets") else exports_dir())
     kind = webview.FileDialog.SAVE if hasattr(webview, "FileDialog") else webview.SAVE_DIALOG
     res = win.create_file_dialog(
         kind,
-        save_filename=p.get("name") or "export.xlsx",
+        directory=str(folder),
+        save_filename=name,
         file_types=tuple(p.get("types") or ("All files (*.*)",)),
     )
     if not res:

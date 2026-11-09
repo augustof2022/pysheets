@@ -25,7 +25,7 @@ compile to vectorised SQL. The UI is a canvas-rendered grid in a native Windows 
 | **Google Sheets** | Import a tab as a **linked sheet** and press **Refresh** to pull the latest data. **Consolidate** the same tab from a list of spreadsheets (a directory sheet, a tab in this workbook, or pasted IDs) into one table with source columns and a refresh log. Refreshing re-reads the list, so new IDs are picked up. |
 | **Python scripts** | An Apps Script-style editor (**Extensions → Python scripts**) with macros, custom formula functions and "run my existing `.py` file" scripts. Scripts are saved inside the workbook. Every tab is a SQL table for DuckDB and a pandas DataFrame. |
 | **Layout** | Freeze rows/columns, multiple tabs (rename, reorder by drag, duplicate, delete), column resize and autofit, row density, light/dark theme, command palette (**Ctrl+K**). |
-| **Files** | Native `.pysheets` workbook (a single DuckDB file that keeps data, formulas, formats, rules, links and scripts). |
+| **Files** | Native `.pysheets` workbook (a single DuckDB file that keeps data, formulas, formats, rules, links and scripts). Workbooks are saved in **`Documents\PySheets`** and exports in `Documents\PySheets\Exports`. Both are created automatically, the Save/Open dialogs start there, and **File → Open PySheets folder** opens it in Explorer. |
 
 ## Install (Windows)
 
