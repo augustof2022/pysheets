@@ -4,6 +4,7 @@ import { rpc } from "./api";
 import { BusyBar, FormulaBar, SheetTabs, Toasts, TopBar } from "./components/Chrome";
 import { FloatingMenu } from "./components/Menu";
 import Toolbar from "./components/Toolbar";
+import Tooltip from "./components/Tooltip";
 import Grid from "./grid/Grid";
 import { Dialogs } from "./panels/Dialogs";
 import { CommandPalette, FilterPopover, FindReplace } from "./panels/Popovers";
@@ -141,6 +142,7 @@ export default function App() {
         </Suspense>
       )}
       <Toasts />
+      <Tooltip />
       {menu && <FloatingMenu items={menu.items} x={menu.x} y={menu.y} onClose={() => useApp.setState({ menu: null })} />}
       {dropping && (
         <div className="drop-overlay fade-in">

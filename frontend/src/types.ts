@@ -132,6 +132,7 @@ export interface WorkbookInfo {
   scripts: { id: string; name: string; kind: "macro" | "functions" | "file" }[];
   scripts_trusted: boolean;
   custom_functions: string[];
+  custom_function_docs?: Record<string, { params: string[]; doc: string }>;
   sheets: SheetInfo[];
 }
 

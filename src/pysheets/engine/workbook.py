@@ -163,6 +163,10 @@ class Workbook:
             ],
             "scripts_trusted": self._scripting.trusted if self._scripting is not None else True,
             "custom_functions": sorted(self.custom_functions),
+            "custom_function_docs": {
+                n: {"params": m.get("param_names", []), "doc": m.get("doc", "")}
+                for n, m in self.custom_functions.items()
+            },
             "sheets": [self.sheet_info(s) for s in self.sheets],
         }
 

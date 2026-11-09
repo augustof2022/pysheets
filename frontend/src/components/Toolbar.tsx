@@ -44,11 +44,48 @@ const SWATCHES = [
   ["#991b1b", "#9a3412", "#92400e", "#854d0e", "#166534", "#155e75", "#1e40af", "#5b21b6"],
 ];
 
-function Btn(props: { tip: string; onClick: () => void; active?: boolean; disabled?: boolean; children: React.ReactNode; wide?: boolean }) {
+/** One-line explanations shown under the tooltip title. */
+const TIP_DESC: Record<string, string> = {
+  Undo: "Reverse your last change",
+  Redo: "Re-apply the change you just undid",
+  "Number format": "Show numbers as currency, percent, dates, scientific…",
+  "Fewer decimals": "Show one decimal place less",
+  "More decimals": "Show one decimal place more",
+  Bold: "Make the selected text bold",
+  Italic: "Slant the selected text",
+  Underline: "Underline the selected text",
+  Strikethrough: "Draw a line through the selected text",
+  "Text color": "Change the colour of the text",
+  "Fill color": "Change the background colour of the cells",
+  Borders: "Add or remove cell borders, with line style and colour",
+  "Merge cells": "Combine the selected cells into one",
+  "Align left": "Line text up against the left edge",
+  "Align center": "Centre text in the cell",
+  "Align right": "Line text up against the right edge",
+  "Freeze rows / columns": "Keep header rows or columns visible while scrolling",
+  Filter: "Show only rows that match values or conditions",
+  "Sort A → Z by this column": "Sort the sheet ascending by the active column",
+  "Sort Z → A by this column": "Sort the sheet descending by the active column",
+  Functions: "Insert a function such as SUM, AVERAGE or VLOOKUP",
+  "Pivot table": "Summarise data by rows, columns and values",
+  "Conditional formatting": "Colour cells automatically based on rules",
+  "Data validation": "Restrict what can be entered (dropdowns, numbers, dates…)",
+  Duplicates: "Find, highlight or remove duplicate values",
+  "Find and replace": "Search the sheet and replace text",
+  "Python scripts": "Write and run Python, or create custom formula functions",
+};
+
+function tipDesc(tip: string): string | undefined {
+  return TIP_DESC[tip.replace(/\s*\(.*\)\s*$/, "")];
+}
+
+function Btn(props: { tip: string; desc?: string; onClick: () => void; active?: boolean; disabled?: boolean; children: React.ReactNode; wide?: boolean }) {
   return (
     <button
       className={`tb-btn ${props.active ? "on" : ""} ${props.wide ? "wide" : ""}`}
       data-tip={props.tip}
+      data-tip-desc={props.desc ?? tipDesc(props.tip)}
+      aria-label={props.tip}
       disabled={props.disabled}
       onMouseDown={(e) => e.preventDefault()}
       onClick={props.onClick}
@@ -168,6 +205,7 @@ export default function Toolbar() {
       <button
         className="tb-select"
         data-tip="Number format"
+        data-tip-desc={TIP_DESC["Number format"]}
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) =>
           openMenu(
@@ -320,17 +358,18 @@ export default function Toolbar() {
       {sheet?.link && (
         <button
           className="btn ghost sm refresh-btn"
-          data-tip={`Linked to Google Sheets${sheet.link.refreshed_at ? ` · refreshed ${sheet.link.refreshed_at.replace("T", " ")}` : ""}`}
+          data-tip="Refresh from Google Sheets"
+          data-tip-desc={`Pull the latest data into this linked sheet${sheet.link.refreshed_at ? ` · last refreshed ${sheet.link.refreshed_at.replace("T", " ")}` : ""}`}
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => A.refreshLinked()}
         >
           <RefreshCw size={15} className={busy ? "spin" : ""} /> Refresh
         </button>
       )}
-      <button className="btn ghost sm" onMouseDown={(e) => e.preventDefault()} onClick={openFile}>
+      <button className="btn ghost sm" data-tip={`Import (${MOD}+O)`} data-tip-desc="Open CSV, Excel, Parquet, JSON or a database" onMouseDown={(e) => e.preventDefault()} onClick={openFile}>
         <Upload size={15} /> Import
       </button>
-      <button className="btn primary sm" onMouseDown={(e) => e.preventDefault()} onClick={exportDialog}>
+      <button className="btn primary sm" data-tip={`Export (${MOD}+Shift+E)`} data-tip-desc="Save a tab or the whole workbook as Excel, CSV, Parquet or SQL" onMouseDown={(e) => e.preventDefault()} onClick={exportDialog}>
         <Download size={15} /> Export
       </button>
       {menu && <FloatingMenu items={menu.items} x={menu.x} y={menu.y} onClose={() => setMenu(null)} />}

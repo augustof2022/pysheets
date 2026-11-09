@@ -1,109 +1,18 @@
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useApp } from "../store";
+import { activeArg, argName, customDoc, getDoc, syntaxArgs, type FnDoc } from "../formulaDocs";
+import { localStorageSet, useApp } from "../store";
+
+let helpOpenPref = (() => {
+  try {
+    return localStorage.getItem("pysheets.fnHelp") !== "closed";
+  } catch {
+    return true;
+  }
+})();
 
 export const REF_COLORS = ["#4f46e5", "#e11d48", "#059669", "#d97706", "#7c3aed", "#0891b2", "#db2777", "#65a30d"];
-
-export const FUNC_DOCS: Record<string, [string, string]> = {
-  SUM: ["SUM(value1, [value2, ...])", "Adds numbers or ranges"],
-  AVERAGE: ["AVERAGE(value1, [value2, ...])", "Arithmetic mean, ignoring text"],
-  COUNT: ["COUNT(value1, [value2, ...])", "Counts numeric values"],
-  COUNTA: ["COUNTA(value1, [value2, ...])", "Counts non-empty values"],
-  COUNTBLANK: ["COUNTBLANK(range)", "Counts empty cells"],
-  COUNTIF: ["COUNTIF(range, criterion)", "Counts cells matching a criterion, e.g. \">10\" or \"a*\""],
-  COUNTIFS: ["COUNTIFS(range1, criterion1, [range2, criterion2, ...])", "Counts rows matching all criteria"],
-  SUMIF: ["SUMIF(range, criterion, [sum_range])", "Sums cells matching a criterion"],
-  SUMIFS: ["SUMIFS(sum_range, range1, criterion1, ...)", "Sums rows matching all criteria"],
-  AVERAGEIF: ["AVERAGEIF(range, criterion, [average_range])", "Average of matching cells"],
-  AVERAGEIFS: ["AVERAGEIFS(average_range, range1, criterion1, ...)", "Average of rows matching all criteria"],
-  MAXIFS: ["MAXIFS(max_range, range1, criterion1, ...)", "Maximum among matching rows"],
-  MINIFS: ["MINIFS(min_range, range1, criterion1, ...)", "Minimum among matching rows"],
-  MIN: ["MIN(value1, [value2, ...])", "Smallest number"],
-  MAX: ["MAX(value1, [value2, ...])", "Largest number"],
-  MEDIAN: ["MEDIAN(value1, [value2, ...])", "Median value"],
-  IF: ["IF(condition, value_if_true, [value_if_false])", "Chooses a value based on a condition"],
-  IFS: ["IFS(condition1, value1, [condition2, value2, ...])", "First value whose condition is true"],
-  IFERROR: ["IFERROR(value, [value_if_error])", "Fallback when a value is an error"],
-  IFNA: ["IFNA(value, value_if_na)", "Fallback when a lookup finds nothing"],
-  AND: ["AND(logical1, [logical2, ...])", "TRUE if all are true"],
-  OR: ["OR(logical1, [logical2, ...])", "TRUE if any is true"],
-  NOT: ["NOT(logical)", "Logical negation"],
-  SWITCH: ["SWITCH(expression, case1, value1, [default])", "Matches an expression against cases"],
-  VLOOKUP: ["VLOOKUP(search_key, range, index, [is_sorted])", "Vertical lookup — use FALSE for exact match"],
-  HLOOKUP: ["HLOOKUP(search_key, range, index, [is_sorted])", "Horizontal lookup"],
-  XLOOKUP: ["XLOOKUP(search_key, lookup_range, result_range, [missing_value], [match_mode], [search_mode])", "Modern lookup in any direction"],
-  INDEX: ["INDEX(range, [row], [column])", "Value at a position in a range"],
-  MATCH: ["MATCH(search_key, range, [search_type])", "Position of a value — use 0 for exact match"],
-  CHOOSE: ["CHOOSE(index, choice1, [choice2, ...])", "Pick a value by position"],
-  FILTER: ["FILTER(range, condition1, [condition2, ...])", "Rows of a range meeting conditions (spills)"],
-  SORT: ["SORT(range, [sort_column], [is_ascending], ...)", "Sorted copy of a range (spills)"],
-  SORTN: ["SORTN(range, [n], [display_ties_mode], [sort_column], [is_ascending])", "Top n rows after sorting"],
-  UNIQUE: ["UNIQUE(range)", "Distinct rows of a range (spills)"],
-  QUERY: ["QUERY(data, query, [headers])", "Google Visualization query, e.g. \"select A, sum(C) group by A\""],
-  ARRAYFORMULA: ["ARRAYFORMULA(array_formula)", "Evaluates an expression over whole ranges"],
-  SEQUENCE: ["SEQUENCE(rows, [columns], [start], [step])", "Array of sequential numbers"],
-  TRANSPOSE: ["TRANSPOSE(range)", "Swaps rows and columns"],
-  SPLIT: ["SPLIT(text, delimiter, [split_by_each], [remove_empty_text])", "Splits text into columns"],
-  FLATTEN: ["FLATTEN(range1, [range2, ...])", "Flattens ranges into one column"],
-  TRIM: ["TRIM(text)", "Removes leading, trailing and repeated spaces"],
-  CLEAN: ["CLEAN(text)", "Removes non-printable characters"],
-  UPPER: ["UPPER(text)", "Converts to upper case"],
-  LOWER: ["LOWER(text)", "Converts to lower case"],
-  PROPER: ["PROPER(text)", "Capitalises Each Word"],
-  LEN: ["LEN(text)", "Length of text"],
-  LEFT: ["LEFT(text, [number_of_characters])", "Leftmost characters"],
-  RIGHT: ["RIGHT(text, [number_of_characters])", "Rightmost characters"],
-  MID: ["MID(text, start, length)", "Substring"],
-  SUBSTITUTE: ["SUBSTITUTE(text, search_for, replace_with, [occurrence])", "Replaces text"],
-  REPLACE: ["REPLACE(text, position, length, new_text)", "Replaces part of a string"],
-  CONCATENATE: ["CONCATENATE(string1, [string2, ...])", "Joins strings (or whole ranges)"],
-  CONCAT: ["CONCAT(value1, value2)", "Joins two values"],
-  TEXTJOIN: ["TEXTJOIN(delimiter, ignore_empty, text1, [text2, ...])", "Joins values with a delimiter"],
-  JOIN: ["JOIN(delimiter, value_or_array1, ...)", "Joins values with a delimiter"],
-  TEXT: ["TEXT(number, format)", "Formats a number or date as text, e.g. \"#,##0.00\""],
-  VALUE: ["VALUE(text)", "Converts text to a number"],
-  FIND: ["FIND(search_for, text, [starting_at])", "Case-sensitive position of text"],
-  SEARCH: ["SEARCH(search_for, text, [starting_at])", "Case-insensitive position of text"],
-  REGEXMATCH: ["REGEXMATCH(text, regular_expression)", "TRUE if text matches"],
-  REGEXEXTRACT: ["REGEXEXTRACT(text, regular_expression)", "Extracts the first match"],
-  REGEXREPLACE: ["REGEXREPLACE(text, regular_expression, replacement)", "Replaces matches"],
-  ROUND: ["ROUND(value, [places])", "Rounds half away from zero"],
-  ROUNDUP: ["ROUNDUP(value, [places])", "Rounds away from zero"],
-  ROUNDDOWN: ["ROUNDDOWN(value, [places])", "Rounds towards zero"],
-  ABS: ["ABS(value)", "Absolute value"],
-  MOD: ["MOD(dividend, divisor)", "Remainder"],
-  POWER: ["POWER(base, exponent)", "Exponentiation"],
-  SQRT: ["SQRT(value)", "Square root"],
-  SUMPRODUCT: ["SUMPRODUCT(array1, [array2, ...])", "Sum of element-wise products"],
-  DATE: ["DATE(year, month, day)", "Builds a date"],
-  TODAY: ["TODAY()", "Current date"],
-  NOW: ["NOW()", "Current date and time"],
-  YEAR: ["YEAR(date)", "Year of a date"],
-  MONTH: ["MONTH(date)", "Month of a date"],
-  DAY: ["DAY(date)", "Day of month"],
-  WEEKDAY: ["WEEKDAY(date, [type])", "Day of week"],
-  EOMONTH: ["EOMONTH(start_date, months)", "Last day of a month"],
-  EDATE: ["EDATE(start_date, months)", "Date shifted by months"],
-  DATEDIF: ["DATEDIF(start_date, end_date, unit)", "Difference in D, M or Y"],
-  NETWORKDAYS: ["NETWORKDAYS(start_date, end_date)", "Working days between dates"],
-  ISBLANK: ["ISBLANK(value)", "TRUE if empty"],
-  ISNUMBER: ["ISNUMBER(value)", "TRUE if numeric"],
-  ISTEXT: ["ISTEXT(value)", "TRUE if text"],
-  ISERROR: ["ISERROR(value)", "TRUE if an error"],
-  ISEMAIL: ["ISEMAIL(value)", "TRUE if a valid e-mail address"],
-  ROW: ["ROW([cell_reference])", "Row number"],
-  COLUMN: ["COLUMN([cell_reference])", "Column number"],
-  ROWS: ["ROWS(range)", "Number of rows"],
-  COLUMNS: ["COLUMNS(range)", "Number of columns"],
-  COUNTUNIQUE: ["COUNTUNIQUE(value1, [value2, ...])", "Counts distinct values"],
-  LARGE: ["LARGE(data, n)", "n-th largest value"],
-  SMALL: ["SMALL(data, n)", "n-th smallest value"],
-  STDEV: ["STDEV(value1, [value2, ...])", "Sample standard deviation"],
-  PERCENTILE: ["PERCENTILE(data, percentile)", "Value at a percentile"],
-  HYPERLINK: ["HYPERLINK(url, [link_label])", "Displays a link label"],
-  RAND: ["RAND()", "Random number between 0 and 1"],
-  RANDBETWEEN: ["RANDBETWEEN(low, high)", "Random integer"],
-};
 
 export type Tok = { kind: "ref" | "func" | "str" | "num" | "op" | "text" | "err" | "bool"; text: string; color?: string };
 
@@ -204,6 +113,19 @@ interface Props {
 export default function FormulaInput(p: Props) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
   const functions = useApp((s) => s.functions);
+  const customDocs = useApp((s) => s.info?.custom_function_docs);
+  const [helpOpen, setHelpOpen] = useState(helpOpenPref);
+  const toggleHelp = () => {
+    helpOpenPref = !helpOpen;
+    localStorageSet("pysheets.fnHelp", helpOpenPref ? "open" : "closed");
+    setHelpOpen(helpOpenPref);
+  };
+  const docFor = (name: string): FnDoc | null => {
+    const d = getDoc(name);
+    if (d) return d;
+    const c = customDocs?.[name];
+    return c ? customDoc(name, c.params, c.doc) : null;
+  };
   const [caret, setCaret] = useState(p.caret ?? p.value.length);
   const [acIndex, setAcIndex] = useState(0);
   const [focused, setFocused] = useState(false);
@@ -242,7 +164,15 @@ export default function FormulaInput(p: Props) {
   };
 
   const rect = ref.current?.getBoundingClientRect();
-  const sig = ac?.fn ? FUNC_DOCS[ac.fn] : null;
+  // the function the caret is inside (help card), or the highlighted autocomplete item
+  const helpDoc = ac?.fn ? docFor(ac.fn) : null;
+  const listDoc = acOpen ? docFor(ac!.items[acIndex]) : null;
+  const below = rect ? rect.bottom + 340 < window.innerHeight || rect.top < 340 : true;
+  const popStyle: React.CSSProperties = rect
+    ? below
+      ? { left: Math.max(8, Math.min(rect.left, window.innerWidth - 420)), top: rect.bottom + 6 }
+      : { left: Math.max(8, Math.min(rect.left, window.innerWidth - 420)), bottom: window.innerHeight - rect.top + 6 }
+    : {};
 
   return (
     <div className={`fi ${p.className || ""}`} style={{ minWidth: p.minWidth }}>
@@ -279,6 +209,11 @@ export default function FormulaInput(p: Props) {
           p.onBlur?.();
         }}
         onKeyDown={(e) => {
+          if (e.key === "F1" && helpDoc) {
+            e.preventDefault();
+            toggleHelp();
+            return;
+          }
           if (acOpen) {
             if (e.key === "ArrowDown") {
               e.preventDefault();
@@ -299,30 +234,35 @@ export default function FormulaInput(p: Props) {
           p.onKeyDown?.(e, acOpen);
         }}
       />
-      {focused && rect && (acOpen || sig) &&
+      {focused && rect && (acOpen || helpDoc) &&
         createPortal(
-          <div className="ac-pop" style={{ left: Math.min(rect.left, window.innerWidth - 380), top: rect.bottom + 6 }}>
-            {sig && (
-              <div className="ac-sig">
-                <SigLine sig={sig[0]} arg={ac!.argIdx} />
-                <div className="ac-sig-doc">{sig[1]}</div>
-              </div>
+          <div className="ac-pop" style={popStyle} onMouseDown={(e) => e.preventDefault()}>
+            {acOpen ? (
+              <>
+                {ac!.items.map((f, i) => (
+                  <div
+                    key={f}
+                    className={`ac-item ${i === acIndex ? "on" : ""}`}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      accept(f);
+                    }}
+                    onMouseEnter={() => setAcIndex(i)}
+                  >
+                    <span className="ac-name">{f}</span>
+                    <span className="ac-doc">{docFor(f)?.summary || ""}</span>
+                  </div>
+                ))}
+                {listDoc && (
+                  <div className="ac-preview">
+                    <code>{listDoc.syntax}</code>
+                    <span>Tab or Enter to insert</span>
+                  </div>
+                )}
+              </>
+            ) : (
+              helpDoc && <HelpCard doc={helpDoc} argIdx={ac!.argIdx} open={helpOpen} onToggle={toggleHelp} />
             )}
-            {acOpen &&
-              ac!.items.map((f, i) => (
-                <div
-                  key={f}
-                  className={`ac-item ${i === acIndex ? "on" : ""}`}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    accept(f);
-                  }}
-                  onMouseEnter={() => setAcIndex(i)}
-                >
-                  <span className="ac-name">{f}</span>
-                  <span className="ac-doc">{FUNC_DOCS[f]?.[1] || ""}</span>
-                </div>
-              ))}
           </div>,
           document.body,
         )}
@@ -330,22 +270,71 @@ export default function FormulaInput(p: Props) {
   );
 }
 
-function SigLine({ sig, arg }: { sig: string; arg: number }) {
-  const m = sig.match(/^(\w[\w.]*)\((.*)\)$/);
-  if (!m) return <span>{sig}</span>;
-  const args = m[2].split(/,\s*/);
-  const repeating = args.findIndex((a) => a.includes("..."));
-  const active = repeating >= 0 && arg >= repeating ? repeating - 1 + ((arg - repeating + 1) % 2 === 0 ? 1 : 0) : arg;
+/** Google Sheets-style formula help: syntax with the current argument, example, summary, arguments. */
+function HelpCard({ doc, argIdx, open, onToggle }: { doc: FnDoc; argIdx: number; open: boolean; onToggle: () => void }) {
+  const tokens = syntaxArgs(doc.syntax);
+  const active = activeArg(tokens, argIdx);
+  const name = doc.syntax.slice(0, doc.syntax.indexOf("("));
+  const body = useRef<HTMLDivElement>(null);
+  // keep the explanation of the argument being typed in view
+  useEffect(() => {
+    const b = body.current;
+    const on = b?.querySelector<HTMLElement>(".fh-arg.on");
+    if (!b || !on) return;
+    const top = on.offsetTop; // .fh-body is position: relative
+    if (top < b.scrollTop || top + on.offsetHeight > b.scrollTop + b.clientHeight) {
+      b.scrollTo({ top: Math.max(0, top - 8), behavior: "smooth" });
+    }
+  }, [active, open]);
+  let inBrackets = false; // "[criteria_range2, criterion2, ...]": every token in the group is optional
+  const argRows = tokens
+    .map((t, i) => {
+      if (t.startsWith("[")) inBrackets = true;
+      const row = { i, name: argName(t), optional: inBrackets, desc: doc.args[i] };
+      if (t.endsWith("]")) inBrackets = false;
+      return row;
+    })
+    .filter((a) => a.desc && a.name !== "…");
   return (
-    <span className="ac-sigline">
-      <b>{m[1]}</b>(
-      {args.map((a, i) => (
-        <span key={i}>
-          {i > 0 && ", "}
-          <span className={i === active ? "ac-arg-on" : ""}>{a}</span>
+    <div className="fh">
+      <button className="fh-head" onClick={onToggle} data-tip={open ? "Hide formula help (F1)" : "Show formula help (F1)"}>
+        <span className="ac-sigline">
+          <b>{name}</b>(
+          {tokens.map((t, i) => (
+            <span key={i}>
+              {i > 0 && ", "}
+              <span className={i === active ? "ac-arg-on" : ""}>{t}</span>
+            </span>
+          ))}
+          )
         </span>
-      ))}
-      )
-    </span>
+        {open ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+      </button>
+      {open && (
+        <div className="fh-body" ref={body}>
+          <div className="fh-sec">
+            <div className="fh-label">Example</div>
+            <code className="fh-example">={doc.example}</code>
+          </div>
+          <div className="fh-sec">
+            <div className="fh-label">Summary</div>
+            <div>{doc.summary}</div>
+          </div>
+          {argRows.map((a) => (
+            <div key={a.i} className={`fh-arg ${a.i === active ? "on" : ""}`}>
+              <div className="fh-argname">
+                {a.name}
+                {a.optional && <span className="fh-opt">optional</span>}
+              </div>
+              <div className="fh-argdesc">{a.desc}</div>
+            </div>
+          ))}
+          <div className="fh-foot">
+            <span>{doc.category}</span>
+            <span>F1 to hide</span>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
