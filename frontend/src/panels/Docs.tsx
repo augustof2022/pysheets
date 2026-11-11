@@ -129,7 +129,7 @@ const SECTIONS: Section[] = [
     id: "import",
     title: "Importing data",
     icon: Upload,
-    keywords: "open import csv excel xlsx parquet json sqlite duckdb database sql postgres mysql drag drop delimiter header",
+    keywords: "open import csv excel xlsx parquet json sqlite duckdb database sql postgres mysql drag drop delimiter header another file link two files cross workbook external reference",
     body: () => (
       <>
         <p>
@@ -148,6 +148,18 @@ const SECTIONS: Section[] = [
             ["Google Sheets", <span key="g">See <a onClick={() => go("google")}>Google Sheets</a>: linked data you can refresh.</span>],
           ]}
         />
+        <h3>Use another file in formulas</h3>
+        <p>
+          To combine data from two files, e.g. INDEX/MATCH or FILTER across another <C>.pysheets</C> workbook or an Excel file, use <b>File → Use another file in formulas…</b>. Opening a second <C>.pysheets</C> file while one is open also offers this. Pick the file and
+          its tabs. They are added to this workbook as <b>linked tabs</b> (link icon) that work in formulas like any other tab: <C>=INDEX('prices'!B:B, MATCH(A2, 'prices'!A:A, 0))</C>.
+        </p>
+        <ul className="dlist">
+          <li>While typing a formula, click a linked tab and click its cells or column letters to insert references, then keep typing. You can hop across as many tabs as you like.</li>
+          <li>
+            When the other file changes (saved in Excel or another PySheets window), PySheets notices and offers <b>Refresh</b>; you can also press <b>Refresh</b> on the tab any time. Columns you add to a linked tab yourself are kept.
+          </li>
+          <li>Linked tabs are copies: editing them does not change the other file.</li>
+        </ul>
         <Tip>
           Importing several files at once puts each into its own tab. If a column mixes numbers and text it is stored as text; formulas still treat numeric-looking text as numbers.
         </Tip>
@@ -213,7 +225,8 @@ const SECTIONS: Section[] = [
             [<C key="c">A:A</C>, "A whole column (data rows, without the header)."],
             [<C key="d">A2:A</C>, "From A2 to the end of the column."],
             [<C key="e">$A$2</C>, "Absolute: stays fixed when copied or filled. $A2 / A$2 lock only the column / row."],
-            [<C key="f">Sales!B:B</C>, <span key="f2">Another tab. Use quotes for names with spaces: <C>'Q1 data'!A2</C>. While editing, click cells on another tab to insert references.</span>],
+            [<C key="f">Sales!B:B</C>, <span key="f2">Another tab. Use quotes for names with spaces: <C>'Q1 data'!A2</C>. While editing, click another tab, then its cells or column letters, to insert references, and keep typing.</span>],
+            [<span key="g">Another file</span>, <span key="g2">Add it with <b>File → Use another file in formulas…</b>; its tabs then work like the ones above. <a onClick={() => go("import")}>More</a></span>],
           ]}
         />
         <h3>Column formulas: one formula for millions of rows</h3>

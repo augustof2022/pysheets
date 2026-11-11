@@ -8,6 +8,7 @@ import { MOD } from "../shortcuts";
 import { AboutDialog } from "./About";
 import { DocsDialog } from "./Docs";
 import { GoogleDialog } from "./GoogleDialog";
+import { LinkDialog } from "./LinkDialog";
 
 export function Shell({ title, sub, children, footer, wide }: { title: string; sub?: string; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean }) {
   useEffect(() => {
@@ -550,6 +551,7 @@ export function Dialogs() {
   if (d === "shortcuts") return <ShortcutsDialog />;
   if (d === "about") return <AboutDialog />;
   if (d === "docs") return <DocsDialog />;
+  if (d === "link") return <LinkDialog />;
   if (d === "split") return <SplitDialog />;
   if (d === "google") return <GoogleDialog />;
   return null;

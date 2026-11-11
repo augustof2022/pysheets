@@ -12,7 +12,8 @@ import { SidePanel } from "./panels/SidePanels";
 import { enableScripts, openScripts } from "./scripts";
 import { ShieldAlert } from "lucide-react";
 import { handleShortcut } from "./shortcuts";
-import { openDialog, refreshInfo, toast, useApp } from "./store";
+import { call, openDialog, refreshInfo, toast, useApp } from "./store";
+import { invalidate } from "./actions";
 
 const ScriptEditor = lazy(() => import("./panels/ScriptEditor"));
 
@@ -40,7 +41,7 @@ export default function App() {
       const t = e.target as HTMLElement;
       if (t.closest("input, textarea, select") && !t.classList.contains("grid-input")) {
         // still allow the palette and save from text fields
-        if ((e.ctrlKey || e.metaKey) && ["k", "s"].includes(e.key.toLowerCase())) {
+        if ((e.ctrlKey || e.metaKey) && ["k", "s", "f", "h"].includes(e.key.toLowerCase())) {
           if (handleShortcut(e, "global")) e.preventDefault();
         }
         return;
@@ -53,9 +54,33 @@ export default function App() {
       if (useApp.getState().info?.dirty) e.preventDefault();
     };
     window.addEventListener("beforeunload", onBefore);
+    // linked files edited elsewhere (e.g. saved in Excel): offer a one-click refresh
+    let lastStale = "";
+    const onFocus = async () => {
+      try {
+        const { result } = await rpc<{ sheets: string[] }>("files.stale");
+        const key = result.sheets.join(",");
+        if (!result.sheets.length || key === lastStale) return;
+        lastStale = key;
+        const sheets = useApp.getState().info?.sheets.filter((s) => result.sheets.includes(s.id)) || [];
+        const books = [...new Set(sheets.map((s) => s.link?.book).filter(Boolean))].join(", ");
+        toast(`${books} changed on disk`, "info", {
+          label: "Refresh",
+          run: async () => {
+            for (const id of result.sheets) await call("links.refresh", { sheet: id }, { label: `Refreshing ${books}` });
+            lastStale = "";
+            invalidate();
+          },
+        }, 10000);
+      } catch {
+        /* not critical */
+      }
+    };
+    window.addEventListener("focus", onFocus);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("beforeunload", onBefore);
+      window.removeEventListener("focus", onFocus);
     };
   }, []);
 

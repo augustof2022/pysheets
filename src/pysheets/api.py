@@ -685,6 +685,22 @@ def _g_consolidate(wb, p):
     return L.consolidate_gsheets(wb, p["spec"])
 
 
+@rpc("files.tabs", mutates=False, lock=False)
+def _files_tabs(wb, p):
+    return {"tabs": L.file_tabs(p["path"])}
+
+
+@rpc("files.link", lock=False)
+def _files_link(wb, p):
+    """Add another file's tabs to this workbook (linked: Refresh re-reads the file)."""
+    return L.link_file(wb, p["path"], p.get("tabs") or None)
+
+
+@rpc("files.stale", mutates=False, lock=False)
+def _files_stale(wb, p):
+    return {"sheets": L.stale_file_links(wb)}
+
+
 @rpc("links.refresh", lock=False)
 def _links_refresh(wb, p):
     return L.refresh(wb, p["sheet"])

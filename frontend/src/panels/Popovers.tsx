@@ -226,6 +226,7 @@ export function FilterPopover() {
 export function FindReplace() {
   const open = useApp((s) => s.findOpen);
   const mode = useApp((s) => s.findMode);
+  const focusTick = useApp((s) => s.findFocus);
   const [q, setQ] = useState("");
   const [rep, setRep] = useState("");
   const [opts, setOpts] = useState({ match_case: false, whole: false, regex: false, all_sheets: false });
@@ -237,9 +238,13 @@ export function FindReplace() {
   useEffect(() => {
     if (open) {
       setShowRep(mode === "replace");
-      requestAnimationFrame(() => inputRef.current?.select());
+      // focus + select the search text every time Ctrl+F / Ctrl+H is pressed, even if already open
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      });
     }
-  }, [open, mode]);
+  }, [open, mode, focusTick]);
 
   useEffect(() => {
     setCount(null);

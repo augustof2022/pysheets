@@ -61,6 +61,22 @@ def write_rows(
     and column formulas, which are recalculated over the new rows.
     """
     tbl, names = rows_to_arrow(list(names), rows)
+    return write_arrow(wb, names, tbl, sheet=sheet, name=name, link=link, index=index)
+
+
+def write_arrow(
+    wb: Workbook,
+    names: list[str],
+    tbl,
+    *,
+    sheet: Sheet | None = None,
+    name: str | None = None,
+    link: dict | None = None,
+    index: int | None = None,
+    label: str = "Import linked data",
+) -> Sheet:
+    """Like :func:`write_rows` for an Arrow table whose columns are named ``__c0, __c1, …``."""
+    names = list(names)
     reg = f"__link_{uuid.uuid4().hex[:8]}"
     with wb.lock:
         wb.register(reg, tbl)
@@ -71,7 +87,7 @@ def write_rows(
             wb.unregister(reg)
         try:
             if sheet is None:
-                wb._begin("Import from Google Sheets", [])
+                wb._begin(label, [])
                 sid = wb._new_sheet_id()
                 renamed = f"__linkraw2_{sid}"
                 sel = ", ".join(f"{q(f'__c{j}')} AS {q(f'k{j}')}" for j in range(len(names))) or "1 AS dummy"
@@ -351,6 +367,8 @@ def refresh(wb: Workbook, sheet_id: str, client: GoogleClient | None = None) -> 
         link.update(refreshed_at=datetime.now().isoformat(timespec="seconds"), rows=len(rows))
         write_rows(wb, names, rows, sheet=sh, link=link)
         return {"sheets": [sh.id], "rows": len(rows)}
+    if kind == "file":
+        return refresh_file(wb, sh, link)
     if kind in ("gsheet_consolidate", "gsheet_log"):
         group = link["group"]
         spec = None
@@ -394,5 +412,159 @@ def refresh_all(wb: Workbook, client: GoogleClient | None = None) -> dict:
 def describe_link(link: dict | None) -> dict[str, Any] | None:
     if not link:
         return None
-    out = {k: link.get(k) for k in ("kind", "tab", "refreshed_at", "rows", "sources", "spreadsheet_id")}
+    out = {
+        k: link.get(k)
+        for k in ("kind", "tab", "refreshed_at", "rows", "sources", "spreadsheet_id", "path", "book")
+    }
     return out
+
+
+# ------------------------------------------------------------- linked local files
+
+
+def _file_tables(path: str, tabs: list[str] | None = None) -> list[tuple[str, list[str], Any]]:
+    """(tab name, column names, Arrow table with __c0.. columns) for each tab of a local file.
+
+    Reads through a scratch workbook, so every format the importer understands works:
+    .pysheets (values of every tab, formulas already calculated), Excel, CSV, Parquet, JSON,
+    SQLite and DuckDB files.
+    """
+    import os
+
+    from .io import detect_kind, import_file, open_workbook
+
+    if not os.path.exists(path):
+        raise EngineError(f"File not found: {path}")
+    kind = detect_kind(path)
+    scratch = Workbook()
+    try:
+        if kind == "native":
+            open_workbook(scratch, path)
+            sheets = [s for s in scratch.sheets if not tabs or s.name in tabs]
+        else:
+            opts: dict[str, Any] = {}
+            if kind == "excel" and tabs:
+                opts["sheets"] = tabs
+            before = {s.id for s in scratch.sheets}
+            res = import_file(scratch, path, opts)
+            made = set(res.get("sheets") or [])
+            sheets = [s for s in scratch.sheets if s.id in made or (s.id not in before and not made)]
+        out = []
+        scratch.flush()  # DuckDB 2.0: finish any pending result before a new query
+        for sh in sheets:
+            if not sh.columns:
+                continue
+            # only real data: skip the blank spare columns / rows a sheet keeps for typing
+            counts = scratch.con.sql(
+                "SELECT " + ", ".join(f"count({q(c.id)})" for c in sh.columns) + f" FROM {q(sh.table)}"
+            ).fetchall()[0]
+            cols = [c for c, n in zip(sh.columns, counts, strict=False) if n or (c.name or "").strip()]
+            if not cols:
+                continue
+            any_val = " OR ".join(f"{q(c.id)} IS NOT NULL" for c in cols)
+            last = scratch.con.sql(f"SELECT max(__rid) FROM {q(sh.table)} WHERE {any_val}").fetchall()[0][0]
+            sel = ", ".join(f"{q(c.id)} AS {q(f'__c{j}')}" for j, c in enumerate(cols))
+            where = f"WHERE __rid <= {int(last)}" if last is not None else "WHERE false"
+            tbl = scratch.con.sql(f"SELECT {sel} FROM {q(sh.table)} {where} ORDER BY __rid").to_arrow_table()
+            out.append((sh.name, [c.name for c in cols], tbl))
+        return out
+    finally:
+        scratch.close()
+
+
+def link_file(wb: Workbook, path: str, tabs: list[str] | None = None) -> dict:
+    """Add the tabs of another file to this workbook as linked sheets (Refresh re-reads the file).
+
+    Their data can then be used in formulas like any other tab, e.g.
+    ``=INDEX('budget · Sheet1'!C:C, MATCH(A2, 'budget · Sheet1'!A:A, 0))``.
+    """
+    import os
+
+    path = os.path.abspath(path)
+    stem = os.path.splitext(os.path.basename(path))[0]
+    found = _file_tables(path, tabs)
+    if not found:
+        raise EngineError("That file has no data to link")
+    group = uuid.uuid4().hex[:8]
+    mtime = os.path.getmtime(path)
+    created = []
+    for tab, names, tbl in found:
+        title = stem if len(found) == 1 and (not tabs or len(tabs) == 1) else f"{stem} · {tab}"
+        with wb.lock:
+            title = wb._unique_name(title)
+        link = {
+            "kind": "file",
+            "path": path,
+            "tab": tab,
+            "book": os.path.basename(path),
+            "group": group,
+            "mtime": mtime,
+            "rows": tbl.num_rows,
+            "refreshed_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        sh = write_arrow(wb, names, tbl, name=title, link=link, label="Link file")
+        created.append(sh.id)
+    return {"sheets": created, "book": os.path.basename(path)}
+
+
+def refresh_file(wb: Workbook, sh: Sheet, link: dict) -> dict:
+    import os
+
+    path = link["path"]
+    found = _file_tables(path, [link["tab"]] if link.get("tab") else None)
+    match = next((f for f in found if f[0] == link.get("tab")), found[0] if len(found) == 1 else None)
+    if match is None:
+        raise EngineError(f"Tab '{link.get('tab')}' is no longer in {os.path.basename(path)}")
+    _tab, names, tbl = match
+    new_link = dict(
+        link,
+        mtime=os.path.getmtime(path),
+        rows=tbl.num_rows,
+        refreshed_at=datetime.now().isoformat(timespec="seconds"),
+    )
+    write_arrow(wb, names, tbl, sheet=sh, link=new_link)
+    return {"sheets": [sh.id], "rows": tbl.num_rows}
+
+
+def stale_file_links(wb: Workbook) -> list[str]:
+    """Linked-file sheets whose source changed on disk since the last refresh."""
+    import os
+
+    out = []
+    with wb.lock:
+        for s in wb.sheets:
+            ln = s.link or {}
+            if ln.get("kind") == "file":
+                try:
+                    if os.path.getmtime(ln["path"]) > float(ln.get("mtime") or 0) + 0.5:
+                        out.append(s.id)
+                except OSError:
+                    pass
+    return out
+
+
+def file_tabs(path: str) -> list[str]:
+    """Tab names of a file, without loading its data."""
+    import json
+    import os
+
+    import duckdb
+
+    from .io import detect_kind
+
+    if not os.path.exists(path):
+        raise EngineError(f"File not found: {path}")
+    kind = detect_kind(path)
+    if kind == "excel":
+        from python_calamine import CalamineWorkbook
+
+        return list(CalamineWorkbook.from_path(path).sheet_names)
+    if kind == "native":
+        con = duckdb.connect(path, read_only=True)
+        try:
+            row = con.execute("SELECT v FROM __pysheets_meta WHERE k = 'workbook'").fetchone()
+        finally:
+            con.close()
+        meta = json.loads(row[0]) if row else {}
+        return [s.get("name") for s in meta.get("sheets", []) if not s.get("pivot")]
+    return [os.path.splitext(os.path.basename(path))[0]]

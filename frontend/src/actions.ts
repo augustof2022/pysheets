@@ -435,10 +435,11 @@ export async function changeDecimals(delta: number) {
 export async function refreshLinked(sheet?: string) {
   const sh = sheet ? useApp.getState().info?.sheets.find((s) => s.id === sheet) : currentSheet();
   if (!sh?.link) {
-    toast("This sheet isn't linked to Google Sheets", "info");
+    toast("This sheet isn't linked to a file or Google Sheets", "info");
     return;
   }
-  const r = await call<{ rows?: number | Record<string, number> }>("links.refresh", { sheet: sh.id }, { label: "Refreshing from Google Sheets" });
+  const fromFile = sh.link.kind === "file";
+  const r = await call<{ rows?: number | Record<string, number> }>("links.refresh", { sheet: sh.id }, { label: fromFile ? `Refreshing from ${sh.link.book}` : "Refreshing from Google Sheets" });
   if (r) {
     const rows = typeof r.rows === "number" ? r.rows : Object.values(r.rows || {}).reduce((a, b) => a + b, 0);
     toast(`Refreshed · ${rows.toLocaleString()} rows`, "success");
@@ -522,7 +523,7 @@ export function describeSelection(sel: Selection): string {
 }
 
 export function openFind(mode: "find" | "replace") {
-  set({ findOpen: true, findMode: mode });
+  set((s) => ({ findOpen: true, findMode: mode, findFocus: s.findFocus + 1 }));
 }
 
 export function openPivot() {

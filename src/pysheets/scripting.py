@@ -183,7 +183,7 @@ class SheetHandle:
 
     def arrow(self):
         self._api._sync_views()
-        return self._api.con.execute(f"SELECT * FROM {q(self.name)}").fetch_arrow_table()
+        return self._api.con.sql(f"SELECT * FROM {q(self.name)}").to_arrow_table()
 
     def get(self, a1: str):
         r, c = _cell(a1)

@@ -577,6 +577,16 @@ kbd {
 }
 
 /* formula help card (Google Sheets-style) */
+.ac-pop.help {
+  pointer-events: none; /* clicks reach the grid underneath: pick references through the card */
+  transition: opacity 0.15s var(--ease-out);
+}
+.ac-pop.help .fh-foot .link {
+  pointer-events: auto;
+}
+.ac-pop.help.peek {
+  opacity: 0.16;
+}
 .fh {
   width: 400px;
   max-width: calc(100vw - 16px);
@@ -601,6 +611,14 @@ kbd {
 .fh-head .ac-sigline {
   flex: 1;
   min-width: 0;
+}
+.fh-key {
+  flex: none;
+  font: 500 10px/1 var(--font);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 4px;
 }
 .fh-head svg {
   flex: none;
@@ -3449,4 +3467,44 @@ select:focus,
   .docs-nav {
     display: none;
   }
+}
+
+/* use another file in formulas */
+.link-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.link-file {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.link-file span {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.link-file small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.link-form .note {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.link-form .note svg {
+  flex: none;
+  margin-top: 3px;
+}
+.link-form .note code {
+  font: 12px var(--mono);
 }

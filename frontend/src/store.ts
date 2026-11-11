@@ -3,7 +3,7 @@ import { rpc, RpcError } from "./api";
 import type { CellInfo, Rect, Selection, SheetInfo, Stats, WorkbookInfo } from "./types";
 
 export type PanelKind = "pivot" | "cf" | "dv" | "dups" | "profile" | "clean";
-export type DialogKind = "import" | "export" | "sql" | "shortcuts" | "about" | "split" | "google" | "docs";
+export type DialogKind = "import" | "export" | "sql" | "shortcuts" | "about" | "split" | "google" | "docs" | "link";
 
 export interface ScriptLine {
   t: number;
@@ -94,6 +94,7 @@ export interface AppState {
   clip: Clip | null;
   findOpen: boolean;
   findMode: "find" | "replace";
+  findFocus: number; // bumped by every Ctrl+F / Ctrl+H so an already-open find bar grabs focus again
   menu: ContextMenu | null;
   filterPopover: { col: number; x: number; y: number } | null;
   palette: boolean;
@@ -125,6 +126,7 @@ export const useApp = create<AppState>(() => ({
   clip: null,
   findOpen: false,
   findMode: "find",
+  findFocus: 0,
   menu: null,
   filterPopover: null,
   palette: false,

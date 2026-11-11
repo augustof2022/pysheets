@@ -120,6 +120,10 @@ export default function FormulaInput(p: Props) {
     localStorageSet("pysheets.fnHelp", helpOpenPref ? "open" : "closed");
     setHelpOpen(helpOpenPref);
   };
+  // the help card lets clicks through to the grid (to pick references under it) and fades
+  // while the pointer is over it, so the cells beneath stay visible
+  const popRef = useRef<HTMLDivElement | null>(null);
+  const [peek, setPeek] = useState(false);
   const docFor = (name: string): FnDoc | null => {
     const d = getDoc(name);
     if (d) return d;
@@ -168,11 +172,31 @@ export default function FormulaInput(p: Props) {
   const helpDoc = ac?.fn ? docFor(ac.fn) : null;
   const listDoc = acOpen ? docFor(ac!.items[acIndex]) : null;
   const below = rect ? rect.bottom + 340 < window.innerHeight || rect.top < 340 : true;
+  const showHelp = !!helpDoc && !acOpen;
   const popStyle: React.CSSProperties = rect
     ? below
       ? { left: Math.max(8, Math.min(rect.left, window.innerWidth - 420)), top: rect.bottom + 6 }
       : { left: Math.max(8, Math.min(rect.left, window.innerWidth - 420)), bottom: window.innerHeight - rect.top + 6 }
     : {};
+
+  useEffect(() => {
+    if (!focused || !showHelp) {
+      setPeek(false);
+      return;
+    }
+    const inside = (el: Element | null | undefined, x: number, y: number) => {
+      const r = el?.getBoundingClientRect();
+      return !!r && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    };
+    const move = (e: MouseEvent) => {
+      const card = popRef.current;
+      const over = inside(card, e.clientX, e.clientY);
+      const solid = inside(card?.querySelector(".fh-foot .link"), e.clientX, e.clientY);
+      setPeek(over && !solid);
+    };
+    document.addEventListener("mousemove", move);
+    return () => document.removeEventListener("mousemove", move);
+  }, [focused, showHelp]);
 
   return (
     <div className={`fi ${p.className || ""}`} style={{ minWidth: p.minWidth }}>
@@ -236,7 +260,7 @@ export default function FormulaInput(p: Props) {
       />
       {focused && rect && (acOpen || helpDoc) &&
         createPortal(
-          <div className="ac-pop" style={popStyle} onMouseDown={(e) => e.preventDefault()}>
+          <div ref={popRef} className={`ac-pop ${showHelp ? "help" : ""} ${peek ? "peek" : ""}`} style={popStyle} onMouseDown={(e) => e.preventDefault()}>
             {acOpen ? (
               <>
                 {ac!.items.map((f, i) => (
@@ -297,7 +321,7 @@ function HelpCard({ doc, argIdx, open, onToggle }: { doc: FnDoc; argIdx: number;
     .filter((a) => a.desc && a.name !== "…");
   return (
     <div className="fh">
-      <button className="fh-head" onClick={onToggle} data-tip={open ? "Hide formula help (F1)" : "Show formula help (F1)"}>
+      <button className="fh-head" onClick={onToggle} tabIndex={-1}>
         <span className="ac-sigline">
           <b>{name}</b>(
           {tokens.map((t, i) => (
@@ -308,6 +332,7 @@ function HelpCard({ doc, argIdx, open, onToggle }: { doc: FnDoc; argIdx: number;
           ))}
           )
         </span>
+        <span className="fh-key">F1</span>
         {open ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
       </button>
       {open && (

@@ -154,6 +154,7 @@ export class GridController {
     startW?: number;
     origin?: { r: number; c: number };
     add?: boolean;
+    axis?: "col" | "row"; // whole-column / whole-row reference picks
     fillTo?: Rect;
     grab?: number;
     lastClientX?: number;
@@ -720,6 +721,17 @@ export class GridController {
     this.focusSoon();
     const hit = this.hitTest(e.clientX, e.clientY);
     const additive = e.ctrlKey || e.metaKey;
+    // while typing a formula, header clicks insert whole-column / whole-row references
+    if (this.cb.isEditing() && this.cb.canPickRef() && (hit.area === "colHeader" || hit.area === "rowHeader") && hit.border === undefined) {
+      e.preventDefault();
+      const full =
+        hit.area === "colHeader"
+          ? { r1: 0, c1: hit.c, r2: this.totalRows - 1, c2: hit.c }
+          : { r1: hit.r, c1: 0, r2: hit.r, c2: this.totalCols - 1 };
+      this.cb.onRefPick(full, "start");
+      this.drag = { kind: "ref", startX: e.clientX, startY: e.clientY, origin: hit.area === "colHeader" ? { r: 0, c: hit.c } : { r: hit.r, c: 0 }, axis: hit.area === "colHeader" ? "col" : "row" };
+      return;
+    }
     if (hit.area === "corner") {
       this.commitIfEditing();
       this.setSel({ ranges: [{ r1: 0, c1: 0, r2: this.totalRows - 1, c2: this.totalCols - 1 }], active: { r: 0, c: 0 }, anchor: { r: 0, c: 0 } }, "click");
@@ -874,7 +886,9 @@ export class GridController {
       this.setSel({ ranges: [...this.sel.ranges.slice(0, -1), { r1: Math.min(o, r), c1: 0, r2: Math.max(o, r), c2: this.totalCols - 1 }], active: this.sel.active, anchor: this.sel.anchor }, "drag");
     } else if (d.kind === "ref" && d.origin) {
       const o = d.origin;
-      this.cb.onRefPick({ r1: Math.min(o.r, r), c1: Math.min(o.c, c), r2: Math.max(o.r, r), c2: Math.max(o.c, c) }, "move");
+      if (d.axis === "col") this.cb.onRefPick({ r1: 0, c1: Math.min(o.c, c), r2: this.totalRows - 1, c2: Math.max(o.c, c) }, "move");
+      else if (d.axis === "row") this.cb.onRefPick({ r1: Math.min(o.r, r), c1: 0, r2: Math.max(o.r, r), c2: this.totalCols - 1 }, "move");
+      else this.cb.onRefPick({ r1: Math.min(o.r, r), c1: Math.min(o.c, c), r2: Math.max(o.r, r), c2: Math.max(o.c, c) }, "move");
     } else if (d.kind === "fill") {
       const src = this.sel.ranges[this.sel.ranges.length - 1];
       let to: Rect = { ...src };

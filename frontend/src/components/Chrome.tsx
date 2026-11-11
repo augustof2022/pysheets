@@ -1,4 +1,4 @@
-import { Cloud, Command, Moon, Plus, Sun, X, ChevronDown, Sheet as SheetIcon, AlertTriangle, CheckCircle2, Info as InfoIcon, Loader2, FunctionSquare } from "lucide-react";
+import { Cloud, Command, Moon, Plus, Sun, X, ChevronDown, Sheet as SheetIcon, AlertTriangle, CheckCircle2, Info as InfoIcon, Loader2, FunctionSquare, Link2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import * as A from "../actions";
 import { autoNumber } from "../format";
@@ -266,6 +266,10 @@ export function SheetTabs() {
               if (drag && drag.id !== s.id) call("sheet.move", { sheet: drag.id, index: i });
               setDrag(null);
             }}
+            onMouseDown={(e) => {
+              // typing a formula: switching tabs to pick references must not take the keyboard away
+              if (useApp.getState().editor && renaming !== s.id) e.preventDefault();
+            }}
             onClick={() => selectSheet(s.id)}
             onDoubleClick={() => (setName(s.name), setRenaming(s.id))}
             onContextMenu={(e) => {
@@ -273,7 +277,15 @@ export function SheetTabs() {
               tabMenu(s.id, e.clientX, e.clientY - 250);
             }}
           >
-            {s.pivot ? <span className="tab-badge">⊞</span> : s.link ? <Cloud size={13} className="tab-icon linked" /> : <SheetIcon size={13} className="tab-icon" />}
+            {s.pivot ? (
+              <span className="tab-badge">⊞</span>
+            ) : s.link?.kind === "file" ? (
+              <Link2 size={13} className="tab-icon linked" data-tip={`Linked to ${s.link.book}`} data-tip-desc={s.link.path} />
+            ) : s.link ? (
+              <Cloud size={13} className="tab-icon linked" />
+            ) : (
+              <SheetIcon size={13} className="tab-icon" />
+            )}
             {renaming === s.id ? (
               <input
                 className="tab-input"

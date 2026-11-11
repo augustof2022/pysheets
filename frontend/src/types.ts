@@ -116,7 +116,7 @@ export interface SheetInfo {
   version: number;
   row_height: number;
   source: string | null;
-  link: { kind: string; tab?: string; refreshed_at?: string; rows?: number; sources?: number; group?: string; spreadsheet_id?: string } | null;
+  link: { kind: string; tab?: string; refreshed_at?: string; rows?: number; sources?: number; group?: string; spreadsheet_id?: string; path?: string; book?: string } | null;
   formulas: FormulaCell[];
 }
 

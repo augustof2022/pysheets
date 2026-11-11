@@ -51,6 +51,7 @@ export default function Grid() {
   const sheet = useApp((s) => s.info?.sheets.find((x) => x.id === s.sheetId) || s.info?.sheets[0] || null);
   const theme = useApp((s) => s.theme);
   const editor = useApp((s) => s.editor);
+  const editorSheet = useApp((s) => s.editorSheet);
   const dataVersion = useApp((s) => s.dataVersion);
   const findRect = useRef<Rect | null>(null);
   const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -95,10 +96,12 @@ export default function Grid() {
           const sh = currentSheet();
           const g2 = ctrl.current!;
           const full = rect.r1 === 0 && rect.r2 >= g2.totalRows - 1;
+          const fullRow = !full && rect.c1 === 0 && rect.c2 >= g2.totalCols - 1;
           let label: string;
           const r1 = A.sheetRow(rect.r1);
           const r2 = A.sheetRow(rect.r2);
           if (full) label = `${colLetters(rect.c1)}:${colLetters(rect.c2)}`;
+          else if (fullRow) label = `${r1 + 1}:${r2 + 1}`;
           else if (rect.r1 === rect.r2 && rect.c1 === rect.c2) label = `${colLetters(rect.c1)}${r1 + 1}`;
           else label = `${colLetters(rect.c1)}${r1 + 1}:${colLetters(rect.c2)}${r2 + 1}`;
           const editingSheet = useApp.getState().editorSheet;
@@ -187,6 +190,7 @@ export default function Grid() {
       g.sel = st.sel;
       g.anim.init = false;
       if (!st.editor) g.focus();
+      else window.setTimeout(focusEditor, 0); // keep typing the formula on the new tab
       A.refreshCell();
       loadStats();
     }
@@ -262,9 +266,18 @@ export default function Grid() {
     el.style.visibility = g.isCellVisible(ed.r, ed.c) || ed.origin === "bar" ? "visible" : "hidden";
   }
 
+  /** Put the keyboard back into the formula being edited: the cell editor on its own
+   *  sheet, the formula bar while picking references on another tab. */
   function focusEditor() {
-    const ta = edRef.current?.querySelector("textarea");
-    ta?.focus();
+    const st = useApp.getState();
+    const ed = st.editor;
+    if (!ed) return;
+    const away = !!st.editorSheet && st.editorSheet !== st.sheetId;
+    const ta = away ? document.querySelector<HTMLTextAreaElement>(".fbar-input textarea") : edRef.current?.querySelector("textarea");
+    if (!ta) return;
+    ta.focus();
+    const pos = ed.caret ?? ed.text.length;
+    ta.setSelectionRange(pos, pos);
   }
 
   function updateSpill(sel: Selection) {
@@ -350,7 +363,7 @@ export default function Grid() {
         <div className="sb-thumb" />
       </div>
       {editor && (
-        <div className="cell-editor" ref={edRef}>
+        <div className="cell-editor" ref={edRef} style={editorSheet && sheet && editorSheet !== sheet.id ? { display: "none" } : undefined}>
           <FormulaInput
             value={editor.text}
             caret={editor.caret}

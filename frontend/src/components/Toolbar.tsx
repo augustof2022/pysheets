@@ -358,7 +358,7 @@ export default function Toolbar() {
       {sheet?.link && (
         <button
           className="btn ghost sm refresh-btn"
-          data-tip="Refresh from Google Sheets"
+          data-tip={sheet.link.kind === "file" ? `Refresh from ${sheet.link.book}` : "Refresh from Google Sheets"}
           data-tip-desc={`Pull the latest data into this linked sheet${sheet.link.refreshed_at ? ` · last refreshed ${sheet.link.refreshed_at.replace("T", " ")}` : ""}`}
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => A.refreshLinked()}

@@ -147,6 +147,7 @@ export const TOP_MENUS: TopMenu[] = [
       { label: "New spreadsheet", icon: "file-plus", run: () => newWorkbook() },
       { label: "Open / import…", icon: "folder-open", shortcut: `${MOD}+O`, run: () => openFile() },
       { label: "Import from database…", icon: "database", run: () => openDialog("sql") },
+      { label: "Use another file in formulas…", icon: "link", run: () => openDialog("link") },
       { divider: true },
       { label: "Save", icon: "save", shortcut: `${MOD}+S`, run: () => saveWorkbook() },
       { label: "Save as…", icon: "save", shortcut: `${MOD}+Shift+S`, run: () => saveWorkbookAs() },

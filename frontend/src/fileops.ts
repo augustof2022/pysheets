@@ -16,6 +16,13 @@ export async function openFile() {
     const paths = res?.paths || [];
     if (!paths.length) return;
     if (paths.length === 1 && paths[0].toLowerCase().endsWith(".pysheets")) {
+      const info = useApp.getState().info;
+      const hasWork = !!info && (!!info.path || info.dirty || info.sheets.some((s) => s.nrows > 0 && s.columns.some((c) => c.name)));
+      if (hasWork) {
+        // keep both: add its tabs here (usable in formulas), or replace the current workbook
+        openDialog("link", { path: paths[0], offerOpen: true });
+        return;
+      }
       await call("workbook.open", { path: paths[0] }, { label: "Opening", success: "Workbook opened" });
       useApp.setState({ perSheet: {} });
       invalidate();
