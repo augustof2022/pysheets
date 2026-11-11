@@ -96,10 +96,12 @@ export default function Grid() {
           const sh = currentSheet();
           const g2 = ctrl.current!;
           const full = rect.r1 === 0 && rect.r2 >= g2.totalRows - 1;
+          const fullRow = !full && rect.c1 === 0 && rect.c2 >= g2.totalCols - 1;
           let label: string;
           const r1 = A.sheetRow(rect.r1);
           const r2 = A.sheetRow(rect.r2);
           if (full) label = `${colLetters(rect.c1)}:${colLetters(rect.c2)}`;
+          else if (fullRow) label = `${r1 + 1}:${r2 + 1}`;
           else if (rect.r1 === rect.r2 && rect.c1 === rect.c2) label = `${colLetters(rect.c1)}${r1 + 1}`;
           else label = `${colLetters(rect.c1)}${r1 + 1}:${colLetters(rect.c2)}${r2 + 1}`;
           const editingSheet = useApp.getState().editorSheet;

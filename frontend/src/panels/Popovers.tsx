@@ -230,9 +230,12 @@ export function FindReplace() {
   const [rep, setRep] = useState("");
   const [opts, setOpts] = useState({ match_case: false, whole: false, regex: false, all_sheets: false });
   const [count, setCount] = useState<number | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [showRep, setShowRep] = useState(mode === "replace");
   const inputRef = useRef<HTMLInputElement>(null);
   const pos = useRef({ row: 0, col: -1, sheet: "" });
+  const seq = useRef(0); // id of the latest search; older replies are ignored
 
   useEffect(() => {
     if (open) {
@@ -242,7 +245,11 @@ export function FindReplace() {
   }, [open, mode]);
 
   useEffect(() => {
+    // the query changed: forget the old result (searching only starts on Enter)
+    seq.current++;
     setCount(null);
+    setError(null);
+    setSearching(false);
   }, [q, opts]);
 
   if (!open) return null;
@@ -252,14 +259,28 @@ export function FindReplace() {
     if (!sh || !q) return;
     const sel = useApp.getState().sel;
     if (pos.current.sheet !== sh.id) pos.current = { row: A.sheetRow(sel.active.r), col: sel.active.c - 1, sheet: sh.id };
-    const { result } = await rpc<{ found: boolean; count: number; sheet?: string; row?: number; col?: number; vrow?: number | null }>("find", {
-      sheet: sh.id,
-      query: q,
-      ...opts,
-      row: pos.current.row,
-      col: pos.current.col,
-      backwards,
-    });
+    const id = ++seq.current;
+    setSearching(true);
+    setError(null);
+    let result: { found: boolean; count: number; sheet?: string; row?: number; col?: number; vrow?: number | null };
+    try {
+      ({ result } = await rpc<typeof result>("find", {
+        sheet: sh.id,
+        query: q,
+        ...opts,
+        row: pos.current.row,
+        col: pos.current.col,
+        backwards,
+      }));
+    } catch (e) {
+      if (id === seq.current) {
+        setSearching(false);
+        setError((e as Error).message || "Search failed");
+      }
+      return;
+    }
+    if (id !== seq.current) return; // the query changed while searching
+    setSearching(false);
     setCount(result.count);
     if (!result.found) return;
     if (result.sheet && result.sheet !== sh.id) selectSheet(result.sheet);
@@ -306,8 +327,9 @@ export function FindReplace() {
           <Search size={14} />
           <input
             ref={inputRef}
-            placeholder="Find in sheet"
+            placeholder={opts.all_sheets ? "Find in all sheets — press Enter" : "Find in sheet — press Enter"}
             value={q}
+            aria-busy={searching}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
@@ -316,7 +338,23 @@ export function FindReplace() {
               }
             }}
           />
-          {count !== null && <span className="find-count">{count === 0 ? "No results" : `${count.toLocaleString()} found`}</span>}
+          {searching ? (
+            <span className="find-count searching" role="status">
+              <span className="mini-spin" /> Searching…
+            </span>
+          ) : error ? (
+            <span className="find-count err" data-tip={error}>
+              {error.length > 28 ? "Invalid search" : error}
+            </span>
+          ) : count !== null ? (
+            <span className="find-count">{count === 0 ? "No results" : `${count.toLocaleString()} found`}</span>
+          ) : (
+            q && (
+              <span className="find-count hint">
+                Press <kbd>Enter</kbd>
+              </span>
+            )
+          )}
         </div>
         <button className={`chip ${opts.match_case ? "on" : ""}`} data-tip="Match case" onClick={() => setOpts({ ...opts, match_case: !opts.match_case })}>
           Aa

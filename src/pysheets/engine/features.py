@@ -764,12 +764,9 @@ def find(
         if not sh.columns:
             per_sheet.append(0)
             continue
-        conds = [_match_expr(S(f"t.{q(c.id)}", c.typ), query, match_case, whole, regex) for c in sh.columns]
-        cnt_sql = " + ".join(f"coalesce(CAST({c} AS INTEGER), 0)" for c in conds)
-        n = wb.con.execute(f"SELECT coalesce(sum({cnt_sql}), 0) FROM {q(sh.table)} t").fetchone()[0]
-        n += sum(1 for c in sh.columns if _py_match(c.name, query, match_case, whole, regex))
-        per_sheet.append(int(n))
-        total += int(n)
+        n = _find_count(wb, sh, query, match_case, whole, regex)
+        per_sheet.append(n)
+        total += n
     if total == 0:
         return {"found": False, "count": 0}
     order = list(range(start_idx, len(sheets))) + list(range(0, start_idx)) + [start_idx]
@@ -810,6 +807,42 @@ def find(
     return {"found": False, "count": total}
 
 
+def _find_count(wb, sh, query, match_case, whole, regex) -> int:
+    """Number of matching cells (and headers) in a sheet.  The full scan is the slow part of
+    Find on big sheets, so it is cached until the sheet changes: pressing Enter again to jump
+    to the next match only has to locate that match."""
+    key = ("find_count", sh.id, sh.version, len(sh.columns), query, match_case, whole, regex)
+    if key not in wb._cache:
+        conds = [_match_expr(S(f"t.{q(c.id)}", c.typ), query, match_case, whole, regex) for c in sh.columns]
+        cnt_sql = " + ".join(f"coalesce(CAST({c} AS INTEGER), 0)" for c in conds)
+        n = wb.con.execute(f"SELECT coalesce(sum({cnt_sql}), 0) FROM {q(sh.table)} t").fetchone()[0]
+        n += sum(1 for c in sh.columns if _py_match(c.name, query, match_case, whole, regex))
+        wb._cache[key] = int(n)
+    return wb._cache[key]
+
+
+_FIND_CHUNK = 1 << 16  # first window of rows scanned for the next match; doubles each step
+
+
+def _rid_windows(start: int, end: int, backwards: bool):
+    """Row-id windows (lo, hi) moving away from ``start``.  Scanning a small window first means
+    a nearby match is found without reading the whole table; the last window is open-ended."""
+    size = _FIND_CHUNK
+    if not backwards:
+        lo = start
+        while lo <= end:
+            yield lo, lo + size - 1
+            lo += size
+            size = min(size * 2, 1 << 22)
+        yield lo, None
+    else:
+        hi = start
+        while hi >= 0:
+            yield max(hi - size + 1, 0), hi
+            hi -= size
+            size = min(size * 2, 1 << 22)
+
+
 def _find_in_sheet(wb, sh, query, match_case, whole, regex, row, col, backwards):
     cols = sh.columns
     conds = [_match_expr(S(f"t.{q(c.id)}", c.typ), query, match_case, whole, regex) for c in cols]
@@ -822,24 +855,29 @@ def _find_in_sheet(wb, sh, query, match_case, whole, regex, row, col, backwards)
                 if j > col:
                     return 0, j
         rid = max(row, 1) - 1
-        rows = wb.con.execute(
-            f"SELECT __rid, [{lst}] FROM {q(sh.table)} t WHERE __rid >= {rid} AND ({anyc}) "
-            f"ORDER BY __rid LIMIT 2"
-        ).fetchall()
-        for r, flags in rows:
-            for j, fl in enumerate(flags):
-                if fl and (r + 1 > row or j > col):
-                    return r + 1, j
+        for lo, hi in _rid_windows(rid, sh.nrows, False):
+            bound = f" AND __rid <= {hi}" if hi is not None else ""
+            rows = wb.con.execute(
+                f"SELECT __rid, [{lst}] FROM {q(sh.table)} t WHERE __rid >= {lo}{bound} AND ({anyc}) "
+                f"ORDER BY __rid LIMIT 2"
+            ).fetchall()
+            for r, flags in rows:
+                for j, fl in enumerate(flags):
+                    if fl and (r + 1 > row or j > col):
+                        return r + 1, j
         return None
     rid = row - 1
-    rows = wb.con.execute(
-        f"SELECT __rid, [{lst}] FROM {q(sh.table)} t WHERE __rid <= {rid} AND ({anyc}) "
-        f"ORDER BY __rid DESC LIMIT 2"
-    ).fetchall()
-    for r, flags in rows:
-        for j in range(len(flags) - 1, -1, -1):
-            if flags[j] and (r + 1 < row or j < col):
-                return r + 1, j
+    if rid >= 0:
+        # the first window keeps ``rid`` as its upper bound, so rows past nrows are never skipped
+        for i, (lo, hi) in enumerate(_rid_windows(min(rid, sh.nrows), sh.nrows, True)):
+            rows = wb.con.execute(
+                f"SELECT __rid, [{lst}] FROM {q(sh.table)} t WHERE __rid >= {lo} "
+                f"AND __rid <= {rid if i == 0 else hi} AND ({anyc}) ORDER BY __rid DESC LIMIT 2"
+            ).fetchall()
+            for r, flags in rows:
+                for j in range(len(flags) - 1, -1, -1):
+                    if flags[j] and (r + 1 < row or j < col):
+                        return r + 1, j
     for j in reversed(header_hits):
         if row > 0 or j < col:
             return 0, j
