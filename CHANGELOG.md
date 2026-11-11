@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.2
+- **Formulas across tabs:** while typing a formula you can click other tabs and keep typing. The keyboard stays in the formula across as many tabs as you like, and clicking a tab no longer takes it away. The formula help card no longer blocks clicks on the grid: it fades when you point at it, and F1 shows or hides it.
+- **Formulas across files:** File → Use another file in formulas… adds the tabs of another .pysheets workbook, Excel, CSV or Parquet file to this workbook as linked tabs, so INDEX/MATCH, FILTER, VLOOKUP… can use data from both. Opening a second .pysheets file offers the same. When that file changes, PySheets offers Refresh; columns you add yourself are kept.
+- **Find:** Ctrl+F (or Ctrl+H) always jumps into the search box with the text selected, even when the find bar is already open.
+
 ## 0.5.1
 - **Find:** the search starts when you press Enter, the box says "Press Enter" while you type and shows a spinner with "Searching…" while it runs. Jumping to the next match no longer rescans the whole sheet (the match count is reused until the data changes), and the search for it starts near the current cell. An invalid regular expression now shows a message instead of nothing.
 - **Formulas:** while editing a formula, clicking a column header inserts a whole-column reference (`Sheet1!M:M`) and a row header a whole-row reference; drag across headers for several. This used to end the formula and jump back to the tab being edited.
