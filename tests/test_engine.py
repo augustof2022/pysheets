@@ -226,6 +226,23 @@ def test_find_and_replace(wb, sales):
     assert val(wb, sales, 1, 1) == "N."
 
 
+def test_find_scans_in_windows(wb, sales, monkeypatch):
+    # tiny windows so forward, backward and wrap-around searches cross several of them
+    monkeypatch.setattr(F, "_FIND_CHUNK", 8)
+    res = F.find(wb, sales.id, "999", row=0, col=-1)  # ID 999 is row 999 (sheet row 1000)
+    assert res["found"] and (res["row"], res["col"]) == (999, 0)
+    back = F.find(wb, sales.id, "item 3", row=900, col=0, backwards=True)
+    assert back["row"] == 899 and back["col"] == 2  # item 3 every 5 rows: range 898 -> row 899
+    wrap = F.find(wb, sales.id, "1000", row=1000, col=0)
+    assert (wrap["row"], wrap["col"]) == (1000, 0)
+    first = F.find(wb, sales.id, "1000", row=1000, col=0, backwards=True)
+    assert (first["row"], first["col"]) == (1000, 0) and first["count"] == 1
+    # the count is cached until the sheet changes
+    assert any(k[0] == "find_count" for k in wb._cache if isinstance(k, tuple))
+    F.replace_all(wb, sales.id, "item 3", "thing")
+    assert F.find(wb, sales.id, "item 3")["count"] == 0
+
+
 def test_duplicates(wb, sales):
     info = F.duplicates(wb, sales.id, [1, 2], "count")
     assert info["unique"] == 20 and info["duplicates"] == 980

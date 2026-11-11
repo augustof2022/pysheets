@@ -1529,6 +1529,24 @@ select:focus,
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+.find-count.searching {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+}
+.find-count.err {
+  color: var(--danger);
+}
+.find-count.hint kbd {
+  font: inherit;
+  font-size: 10.5px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--text);
+}
 
 /* palette */
 .overlay {

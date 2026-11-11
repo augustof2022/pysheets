@@ -225,7 +225,7 @@ const SECTIONS: Section[] = [
             [<C key="c">A:A</C>, "A whole column (data rows, without the header)."],
             [<C key="d">A2:A</C>, "From A2 to the end of the column."],
             [<C key="e">$A$2</C>, "Absolute: stays fixed when copied or filled. $A2 / A$2 lock only the column / row."],
-            [<C key="f">Sales!B:B</C>, <span key="f2">Another tab. Use quotes for names with spaces: <C>'Q1 data'!A2</C>. While editing, click another tab, then its cells or column letters, to insert references, and keep typing.</span>],
+            [<C key="f">Sales!B:B</C>, <span key="f2">Another tab. Use quotes for names with spaces: <C>'Q1 data'!A2</C>. While editing, click another tab, then its cells, column headers or row headers to insert references such as <C>Sales!M:M</C>, and keep typing.</span>],
             [<span key="g">Another file</span>, <span key="g2">Add it with <b>File → Use another file in formulas…</b>; its tabs then work like the ones above. <a onClick={() => go("import")}>More</a></span>],
           ]}
         />
@@ -283,7 +283,7 @@ const SECTIONS: Section[] = [
             [<b key="f">Filter</b>, <span key="f2"><K>{MOD}+Shift+L</K> or the funnel button adds filter buttons to the header row. Filter by values (with counts), or by condition (greater than, contains, is empty…). Filters hide rows without deleting them.</span>],
             [<b key="s">Sort</b>, "Sort A → Z / Z → A buttons, or the column header menu. The whole sheet is sorted by the active column."],
             [<b key="p">Pivot table</b>, "Data → Pivot table…: pick rows, columns and values (SUM, COUNT, COUNTA, COUNTUNIQUE, AVERAGE, MIN, MAX, MEDIAN, STDEV). A live preview updates as you build it, and the pivot refreshes when the source data changes."],
-            [<b key="r">Find & replace</b>, <span key="r2"><K>{MOD}+F</K> / <K>{MOD}+H</K>. Options: match case, entire cell, regular expressions, all sheets.</span>],
+            [<b key="r">Find & replace</b>, <span key="r2"><K>{MOD}+F</K> / <K>{MOD}+H</K>. Type, then press <K>Enter</K> to search (<K>Shift+Enter</K> for the previous match); a spinner shows while it runs. Options: match case, entire cell, regular expressions, all sheets.</span>],
             [<b key="d">Duplicates</b>, "Data → Find duplicates…: choose the columns that define a duplicate, then count, highlight, mark, or remove extra copies."],
             [<b key="v">Data validation</b>, "Data → Data validation…: dropdown lists, checkboxes, number/date/text-length rules, e-mail, URL, regex, unique values or a custom formula. Choose to warn or reject; the panel lists invalid cells."],
             [<b key="c">Clean up text</b>, "Data → Clean up text…: trim spaces, fix case, remove non-printing characters, in one step for a whole column."],

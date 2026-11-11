@@ -20,6 +20,12 @@ log = logging.getLogger("pysheets")
 WEB_DIR = Path(__file__).parent / "web"
 
 
+def window_title(wb: Workbook) -> str:
+    """Native window title, also shown on the taskbar: the file name comes first so several
+    open PySheets windows can be told apart."""
+    return f"{'• ' if wb.dirty else ''}{wb.title} — PySheets"
+
+
 class AppServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -30,8 +36,24 @@ class AppServer(ThreadingHTTPServer):
         self.token = token
         self.web_dir = web_dir
         self.window = None  # pywebview window, when running as a desktop app
+        self._window_title: str | None = None
         self.upload_dir = Path(wb._tmpdir) / "uploads"
         self.upload_dir.mkdir(parents=True, exist_ok=True)
+
+    def sync_window(self) -> None:
+        """Mirror the workbook state onto the native window: its title (the taskbar label)
+        and whether closing it should ask about unsaved changes."""
+        w = self.window
+        if w is None:
+            return
+        try:
+            w.confirm_close = bool(self.wb.dirty)
+            title = window_title(self.wb)
+            if title != self._window_title:
+                self._window_title = title
+                w.set_title(title)
+        except Exception:  # pragma: no cover - window already closed
+            pass
 
     @property
     def url(self) -> str:
@@ -155,11 +177,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "error": "bad json"}, 400)
             ctx = {"window": self.server.window}
             res = api.dispatch(self.server.wb, req.get("method", ""), req.get("params") or {}, ctx)
-            if self.server.window is not None:
-                try:
-                    self.server.window.confirm_close = bool(self.server.wb.dirty)
-                except Exception:  # pragma: no cover - window already closed
-                    pass
+            self.server.sync_window()
             return self._json(_clean(res))
         if parsed.path == "/api/upload":
             name = os.path.basename((query.get("name") or ["upload.bin"])[0]) or "upload.bin"
