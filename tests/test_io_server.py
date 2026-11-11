@@ -120,3 +120,39 @@ def test_server_requires_token(tmp_path):
         srv.shutdown()
         w.close()
     assert os.path.isdir(w._tmpdir)
+
+
+def test_window_title_follows_workbook(tmp_path):
+    class FakeWindow:
+        confirm_close = False
+
+        def __init__(self):
+            self.titles = []
+
+        def set_title(self, t):
+            self.titles.append(t)
+
+    w = Workbook()
+    w.add_sheet("Sheet1", record=False)
+    srv = make_server(w, 0)
+    srv.window = win = FakeWindow()
+    serve_in_thread(srv)
+
+    def call(method, **params):
+        body = json.dumps({"method": method, "params": params}).encode()
+        req = urllib.request.Request(
+            srv.url + "api/rpc", data=body, method="POST", headers={"X-PySheets-Token": srv.token}
+        )
+        return json.loads(urllib.request.urlopen(req).read())
+
+    try:
+        call("workbook.title", title="Budget 2026")
+        assert win.titles[-1] == "• Budget 2026 — PySheets" and win.confirm_close
+        n = len(win.titles)
+        call("workbook.info")  # nothing changed: the title is not set again
+        assert len(win.titles) == n
+        call("workbook.save", path=str(tmp_path / "Q3 report.pysheets"))
+        assert win.titles[-1] == "Q3 report — PySheets" and not win.confirm_close
+    finally:
+        srv.shutdown()
+        w.close()

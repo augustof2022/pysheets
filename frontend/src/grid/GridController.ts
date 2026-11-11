@@ -147,7 +147,7 @@ export class GridController {
   destroyed = false;
 
   drag: null | {
-    kind: "select" | "colsel" | "rowsel" | "resize" | "fill" | "ref" | "vthumb" | "hthumb";
+    kind: "select" | "colsel" | "rowsel" | "resize" | "fill" | "ref" | "refcol" | "refrow" | "vthumb" | "hthumb";
     startX: number;
     startY: number;
     col?: number;
@@ -731,6 +731,13 @@ export class GridController {
         this.host.classList.add("resizing");
         return;
       }
+      if (this.cb.isEditing() && this.cb.canPickRef()) {
+        // editing a formula: a column header inserts a whole-column reference (e.g. Sheet1!M:M)
+        e.preventDefault();
+        this.cb.onRefPick({ r1: 0, c1: hit.c, r2: this.totalRows - 1, c2: hit.c }, "start");
+        this.drag = { kind: "refcol", startX: e.clientX, startY: e.clientY, origin: { r: 0, c: hit.c } };
+        return;
+      }
       this.commitIfEditing();
       const c = hit.c;
       if (e.shiftKey) {
@@ -744,6 +751,13 @@ export class GridController {
       return;
     }
     if (hit.area === "rowHeader") {
+      if (this.cb.isEditing() && this.cb.canPickRef()) {
+        // editing a formula: a row header inserts a whole-row reference (e.g. 5:5)
+        e.preventDefault();
+        this.cb.onRefPick({ r1: hit.r, c1: 0, r2: hit.r, c2: this.totalCols - 1 }, "start");
+        this.drag = { kind: "refrow", startX: e.clientX, startY: e.clientY, origin: { r: hit.r, c: 0 } };
+        return;
+      }
       this.commitIfEditing();
       const r = hit.r;
       if (e.shiftKey) {
@@ -875,6 +889,12 @@ export class GridController {
     } else if (d.kind === "ref" && d.origin) {
       const o = d.origin;
       this.cb.onRefPick({ r1: Math.min(o.r, r), c1: Math.min(o.c, c), r2: Math.max(o.r, r), c2: Math.max(o.c, c) }, "move");
+    } else if (d.kind === "refcol" && d.origin) {
+      const o = d.origin.c;
+      this.cb.onRefPick({ r1: 0, c1: Math.min(o, c), r2: this.totalRows - 1, c2: Math.max(o, c) }, "move");
+    } else if (d.kind === "refrow" && d.origin) {
+      const o = d.origin.r;
+      this.cb.onRefPick({ r1: Math.min(o, r), c1: 0, r2: Math.max(o, r), c2: this.totalCols - 1 }, "move");
     } else if (d.kind === "fill") {
       const src = this.sel.ranges[this.sel.ranges.length - 1];
       let to: Rect = { ...src };
@@ -914,7 +934,7 @@ export class GridController {
         this.setSel({ ranges: [to], active: this.sel.active, anchor: this.sel.anchor }, "api");
       }
       this.invalidateDraw();
-    } else if (d.kind === "ref" && d.origin) {
+    } else if ((d.kind === "ref" || d.kind === "refcol" || d.kind === "refrow") && d.origin) {
       this.cb.onRefPick({ r1: -1, c1: -1, r2: -1, c2: -1 }, "end");
     }
   }
