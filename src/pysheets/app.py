@@ -11,7 +11,7 @@ import webbrowser
 from . import __version__
 from .engine import io as IO
 from .engine.workbook import Workbook
-from .server import make_server, serve_in_thread
+from .server import make_server, serve_in_thread, window_title
 
 log = logging.getLogger("pysheets")
 
@@ -103,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
         server.serve_forever()
         return 0
     window = webview.create_window(
-        "PySheets",
+        window_title(wb),
         url,
         width=1440,
         height=900,
@@ -116,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
     # The server flips window.confirm_close whenever the workbook becomes dirty/clean,
     # so pywebview's own close prompt only appears when there is something to lose.
     server.window = window
+    server._window_title = window_title(wb)
 
     def _focus_after_google_sign_in():
         # the user finished signing in in their browser: bring PySheets back to the front
