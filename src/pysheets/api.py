@@ -143,6 +143,21 @@ def _redo(wb, p):
     return wb.redo()
 
 
+@rpc("workbook.match_mode")
+def _match_mode(wb, p):
+    return wb.set_match_mode(p["mode"])
+
+
+@rpc("match.summary", mutates=False)
+def _match_summary(wb, p):
+    return wb.match_summary()
+
+
+@rpc("match.rows", mutates=False)
+def _match_rows(wb, p):
+    return {"rows": wb.fuzzy_rows(int(p["id"]), int(p.get("limit", 200)))}
+
+
 @rpc("functions", mutates=False)
 def _functions(wb, p):
     return ALL_FUNCTIONS
@@ -202,27 +217,41 @@ def _cell_set(wb, p):
 
 @rpc("range.set")
 def _range_set(wb, p):
-    return wb.set_range(p["sheet"], p["row"], p["col"], p["values"], label=p.get("label", "Paste"))
+    return wb.set_range(
+        p["sheet"], p["row"], p["col"], p["values"], label=p.get("label", "Paste"), view=bool(p.get("view"))
+    )
 
 
 @rpc("range.clear")
 def _range_clear(wb, p):
-    return wb.clear_range(p["sheet"], p["r1"], p["c1"], p["r2"], p["c2"], p.get("what", "contents"))
+    rows = wb._clips.get(p.get("token") or "") if p.get("token") else None
+    return wb.clear_range(
+        p["sheet"],
+        p["r1"],
+        p["c1"],
+        p["r2"],
+        p["c2"],
+        p.get("what", "contents"),
+        view=bool(p.get("view")),
+        rows=rows,
+    )
 
 
 @rpc("range.text", mutates=False)
 def _range_text(wb, p):
-    return wb.get_range_text(p["sheet"], p["r1"], p["c1"], p["r2"], p["c2"])
+    return wb.get_range_text(p["sheet"], p["r1"], p["c1"], p["r2"], p["c2"], view=bool(p.get("view")))
 
 
 @rpc("range.paste")
 def _range_paste(wb, p):
-    return wb.paste_internal(p["sheet"], p["src"], p["row"], p["col"], p.get("mode", "all"))
+    return wb.paste_internal(
+        p["sheet"], p["src"], p["row"], p["col"], p.get("mode", "all"), view=bool(p.get("view"))
+    )
 
 
 @rpc("range.fill")
 def _range_fill(wb, p):
-    return wb.fill(p["sheet"], p["src"], p["dst"])
+    return wb.fill(p["sheet"], p["src"], p["dst"], view=bool(p.get("view")))
 
 
 @rpc("rows.insert")
@@ -232,7 +261,7 @@ def _rows_insert(wb, p):
 
 @rpc("rows.delete")
 def _rows_delete(wb, p):
-    return wb.delete_rows(p["sheet"], p["r1"], p["r2"])
+    return wb.delete_rows(p["sheet"], p["r1"], p["r2"], view=bool(p.get("view")))
 
 
 @rpc("cols.insert")
@@ -296,15 +325,20 @@ def _filter_values(wb, p):
 # --------------------------------------------------------------- features
 
 
+def _rects(wb, p) -> list:
+    """Selection rectangles in sheet rows; from a filtered view, only the visible rows."""
+    return wb.view_rects(p["sheet"], p["rects"]) if p.get("view") else p["rects"]
+
+
 @rpc("style.set")
 def _style(wb, p):
-    return F.set_style(wb, p["sheet"], p["rects"], p["patch"])
+    return F.set_style(wb, p["sheet"], _rects(wb, p), p["patch"])
 
 
 @rpc("style.borders")
 def _borders(wb, p):
     return F.set_borders(
-        wb, p["sheet"], p["rects"], p["mode"], p.get("line", "thin"), p.get("color", "#1f2937")
+        wb, p["sheet"], _rects(wb, p), p["mode"], p.get("line", "thin"), p.get("color", "#1f2937")
     )
 
 
@@ -380,7 +414,7 @@ def _replace_all(wb, p):
 
 @rpc("stats", mutates=False)
 def _stats(wb, p):
-    return F.selection_stats(wb, p["sheet"], p["rects"])
+    return F.selection_stats(wb, p["sheet"], _rects(wb, p))
 
 
 @rpc("dups")
@@ -392,7 +426,17 @@ def _dups(wb, p):
 
 @rpc("clean.text")
 def _clean(wb, p):
-    return F.transform_text(wb, p["sheet"], p["rects"], p["op"])
+    return F.transform_text(wb, p["sheet"], _rects(wb, p), p["op"])
+
+
+@rpc("match.report", mutates=False)
+def _match_report(wb, p):
+    return F.match_report(wb, p["sheet_a"], p["col_a"], p["sheet_b"], p["col_b"], p.get("samples", 25))
+
+
+@rpc("match.normalize")
+def _match_normalize(wb, p):
+    return F.normalize_columns(wb, p["targets"], p.get("to", "auto"), bool(p.get("keep_original")))
 
 
 @rpc("split.column")

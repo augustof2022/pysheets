@@ -15,7 +15,7 @@ import duckdb
 
 from .model import Formula, Sheet
 from .values import to_json, value_to_text
-from .workbook import EngineError, Workbook, q
+from .workbook import MATCH_FLAGS, EngineError, Workbook, q
 
 CSV_EXT = {".csv", ".tsv", ".txt", ".tab", ".psv"}
 EXCEL_EXT = {".xlsx", ".xlsm", ".xls", ".xlsb", ".ods"}
@@ -994,7 +994,9 @@ def save_workbook(wb: Workbook, path: str) -> dict:
             "sheets": [_clean_meta(s.to_meta()) for s in wb.sheets],
             "formulas": [f.to_dict() for f in wb.formulas.values()],
             "scripts": wb.scripts,
+            "match_mode": wb.match_mode,
         }
+        wb.con.execute(f"CREATE TABLE {alias}.{MATCH_FLAGS} AS SELECT * FROM {MATCH_FLAGS}")
         wb.con.execute(f"CREATE TABLE {alias}.__pysheets_meta (k VARCHAR, v VARCHAR)")
         wb.con.execute(
             f"INSERT INTO {alias}.__pysheets_meta VALUES ('workbook', ?)", [json.dumps(meta, default=str)]
@@ -1031,6 +1033,13 @@ def open_workbook(wb: Workbook, path: str) -> dict:
             wb.con.execute(
                 f"CREATE TABLE {q(sh.table)} AS SELECT * FROM {alias}.{q(sh.table)} ORDER BY __rid"
             )
+        wb.con.execute(f"DELETE FROM {MATCH_FLAGS}")
+        has_flags = wb.con.execute(
+            "SELECT count(*) FROM duckdb_tables() WHERE database_name = ? AND table_name = ?",
+            [alias, MATCH_FLAGS],
+        ).fetchone()[0]
+        if has_flags:
+            wb.con.execute(f"INSERT INTO {MATCH_FLAGS} SELECT fid, rid FROM {alias}.{MATCH_FLAGS}")
     finally:
         wb.con.execute(f"DETACH {alias}")
     wb.sheets = sheets
@@ -1050,6 +1059,7 @@ def open_workbook(wb: Workbook, path: str) -> dict:
     wb.undo_stack.clear()
     wb.redo_stack.clear()
     wb.title = meta.get("title") or _base_name(path)
+    wb.match_mode = meta.get("match_mode") or "smart"
     wb.path = path
     # scripts from a file stay disabled until the user enables them (they run code)
     mgr = wb.scripting
@@ -1080,6 +1090,8 @@ def new_workbook(wb: Workbook) -> dict:
     for meta in list(mgr.functions.values()):
         mgr.unregister_script_functions(meta.get("script_id"))
     wb.scripts = []
+    wb.match_mode = "smart"
+    wb.con.execute(f"DELETE FROM {MATCH_FLAGS}")
     mgr.trusted = True
     wb.add_sheet("Sheet1", record=False)
     wb.undo_stack.clear()

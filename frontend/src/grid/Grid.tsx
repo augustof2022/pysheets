@@ -35,6 +35,7 @@ function readTheme(): GridTheme {
     shadow: v("--frozen-shadow"),
     spill: v("--spill"),
     invalid: v("--danger"),
+    warning: v("--warning"),
     refColors: [],
     checkbox: v("--accent"),
     findFill: v("--find-fill"),
@@ -153,7 +154,17 @@ export default function Grid() {
           const sh = currentSheet();
           const row = A.sheetRow(hit.r);
           const err = sh?.formulas.find((f) => f.error && f.row === row && f.col === hit.c);
+          const fmt = ctrl.current?.flagsAt(hit.r, hit.c)?.find((f) => f[2] === "fmt");
           if (err) setTip({ x: x + 14, y: y + 16, text: err.error! });
+          else if (fmt)
+            setTip({
+              x: x + 14,
+              y: y + 16,
+              text:
+                fmt[3] === "strict"
+                  ? "No exact match — but the value is there in a different format (text vs number, extra spaces, leading zeros, separators or hidden characters). Data → Check key matches shows where; switch Lookup matching to Smart or normalise the columns."
+                  : "Matched despite a format difference (text vs number, extra spaces, leading zeros, separators or hidden characters). Data → Check key matches shows the details and can fix both columns.",
+            });
           else setTip(null);
         },
         onView() {
@@ -309,7 +320,7 @@ export default function Grid() {
       return;
     }
     try {
-      const { result } = await rpc<Stats>("stats", { sheet: sh.id, rects: rects.map((r) => [r.r1, r.c1, r.r2, r.c2]) });
+      const { result } = await rpc<Stats>("stats", { sheet: sh.id, ...A.rectsParam() });
       if (useApp.getState().sel === st.sel) useApp.setState({ stats: result });
     } catch {
       useApp.setState({ stats: null });

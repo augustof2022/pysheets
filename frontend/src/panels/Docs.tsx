@@ -253,6 +253,13 @@ const SECTIONS: Section[] = [
           <C>=QUERY(A1:D, "select B, sum(D) where C &gt; 5 group by B order by sum(D) desc limit 10")</C>. Columns are named by letter. Supported: <C>select</C>, <C>where</C> (with <C>and/or/not</C>, <C>contains</C>, <C>starts with</C>, <C>ends with</C>,{" "}
           <C>matches</C>, <C>like</C>, <C>is null</C>), <C>group by</C>, <C>pivot</C>, <C>order by</C>, <C>limit</C>, <C>offset</C>, <C>label</C>, and the aggregates <C>sum avg count min max</C>.
         </p>
+        <h3>Lookups and format mismatches</h3>
+        <p>
+          A key can fail to match only because of its format: <C>123</C> vs the text <C>"00123"</C>, <C>"ABC-1 "</C> with a trailing or non-breaking space, <C>"1,234"</C> vs <C>1234</C>, or an invisible character pasted from the web. With <b>Smart matching</b> (the default) <C>VLOOKUP</C>,{" "}
+          <C>XLOOKUP</C>, <C>MATCH</C>, <C>HLOOKUP</C>, the <C>COUNTIF</C>/<C>SUMIF</C> family and <C>FILTER</C> conditions see through these differences; exact matches always win. Cells that matched only this way get an <b>amber corner</b>, and a message after the formula runs tells you
+          how many keys matched exactly, matched despite a format difference, or are really missing, so a blank result can be trusted. With <b>Strict matching</b> (Data → Check key matches…) only same-format values match and the amber corner marks keys that exist in another
+          format. <C>CLEANKEY(value)</C> returns the normalised form used for this comparison.
+        </p>
         <h3>Errors</h3>
         <p>
           A cell with an error shows a red triangle; hover it for the reason. Wrap formulas in <C>IFERROR(…, fallback)</C> or <C>IFNA(…)</C> to replace errors. In column formulas, errors become blank cells.
@@ -274,13 +281,19 @@ const SECTIONS: Section[] = [
     id: "data",
     title: "Data tools",
     icon: SlidersHorizontal,
-    keywords: "filter sort pivot find replace duplicates validation dropdown clean trim split statistics profile",
+    keywords: "filter sort pivot find replace duplicates validation dropdown clean trim split statistics profile visible hidden rows key match lookup mismatch normalise",
     body: () => (
       <>
         <Table
           head={["Tool", "How to use it"]}
           rows={[
-            [<b key="f">Filter</b>, <span key="f2"><K>{MOD}+Shift+L</K> or the funnel button adds filter buttons to the header row. Filter by values (with counts), or by condition (greater than, contains, is empty…). Filters hide rows without deleting them.</span>],
+            [
+              <b key="f">Filter</b>,
+              <span key="f2">
+                <K>{MOD}+Shift+L</K> or the funnel button adds filter buttons to the header row. Filter by values (with counts), or by condition (greater than, contains, is empty…). Filters hide rows without deleting them.{" "}
+                <b>While a filter is on, every edit affects only the rows you can see:</b> clearing, deleting rows, pasting (each line goes to the next visible row), copying, fill down / drag-fill, <K>{MOD}+Enter</K> column fills, formatting and text cleanup. Hidden rows are never touched.
+              </span>,
+            ],
             [<b key="s">Sort</b>, "Sort A → Z / Z → A buttons, or the column header menu. The whole sheet is sorted by the active column."],
             [<b key="p">Pivot table</b>, "Data → Pivot table…: pick rows, columns and values (SUM, COUNT, COUNTA, COUNTUNIQUE, AVERAGE, MIN, MAX, MEDIAN, STDEV). A live preview updates as you build it, and the pivot refreshes when the source data changes."],
             [<b key="r">Find & replace</b>, <span key="r2"><K>{MOD}+F</K> / <K>{MOD}+H</K>. Type, then press <K>Enter</K> to search (<K>Shift+Enter</K> for the previous match); a spinner shows while it runs. Options: match case, entire cell, regular expressions, all sheets.</span>],
@@ -288,6 +301,10 @@ const SECTIONS: Section[] = [
             [<b key="v">Data validation</b>, "Data → Data validation…: dropdown lists, checkboxes, number/date/text-length rules, e-mail, URL, regex, unique values or a custom formula. Choose to warn or reject; the panel lists invalid cells."],
             [<b key="c">Clean up text</b>, "Data → Clean up text…: trim spaces, fix case, remove non-printing characters, in one step for a whole column."],
             [<b key="t">Split text to columns</b>, "Data → Split text to columns…: split a column by comma, semicolon, space or any custom separator."],
+            [
+              <b key="km">Check key matches</b>,
+              "Data → Check key matches…: compare the column you look up with the column you look it up in. It counts exact matches, keys that match only once formats are ignored (numbers stored as text, extra spaces, leading zeros, separators, hidden characters) with the reason for each, and keys that are really missing. Normalise both columns to the same kind in one step (optionally keeping a copy of the original values), and switch lookup matching between Smart and Strict.",
+            ],
             [<b key="st">Column statistics</b>, "Data → Column statistics: count, blanks, distinct values, min/max/mean and the most common values."],
           ]}
         />

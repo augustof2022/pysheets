@@ -81,6 +81,8 @@ export interface FormulaCell {
   w: number;
   row_end?: number;
   text?: string;
+  /** lookup diagnostics from the last evaluation */
+  match?: { mode: "smart" | "strict"; exact: number; fuzzy: number; missing: number; blank: number; filter_fuzzy?: number };
 }
 
 export interface PivotSpec {
@@ -131,6 +133,7 @@ export interface WorkbookInfo {
   redo_label: string | null;
   scripts: { id: string; name: string; kind: "macro" | "functions" | "file" }[];
   scripts_trusted: boolean;
+  match_mode?: "smart" | "strict";
   custom_functions: string[];
   custom_function_docs?: Record<string, { params: string[]; doc: string }>;
   sheets: SheetInfo[];
@@ -162,6 +165,7 @@ export interface CellInfo {
     anchor?: string;
     row?: number;
     row_end?: number;
+    skipped?: number; // rows inside the range the formula doesn't cover (e.g. hidden by a filter)
     spill?: [number, number] | null;
   };
   spill_of?: { anchor: string; text: string; row: number; col: number };

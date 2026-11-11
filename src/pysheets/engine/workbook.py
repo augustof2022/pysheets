@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import copy
 import itertools
 import tempfile
@@ -12,6 +13,7 @@ import duckdb
 
 from ..formula import parser as P
 from ..formula.compiler import (
+    NORMKEY_MACROS,
     NUM,
     STR,
     A,
@@ -35,6 +37,8 @@ from .values import (
 INF = 1 << 60
 DEFAULT_COLS = 26
 DEFAULT_ROWS = 1000
+MATCH_FLAGS = "__ps_match_flags"  # (fid, rid) of rows a lookup matched only after normalising formats
+MATCH_MODES = ("smart", "strict")
 
 
 class EngineError(Exception):
@@ -89,6 +93,10 @@ class Workbook:
         self.con = duckdb.connect(path or ":memory:")
         self.con.execute(f"SET temp_directory = '{self._tmpdir.replace(chr(39), '')}'")
         self.con.execute("SET preserve_insertion_order = true")
+        self.con.execute(NORMKEY_MACROS)
+        self.con.execute(f"CREATE TEMP TABLE IF NOT EXISTS {MATCH_FLAGS} (fid BIGINT, rid BIGINT)")
+        self.match_mode = "smart"  # lookup matching: "smart" (format-tolerant) or "strict"
+        self._clips: dict[str, list[int]] = {}  # rows copied from filtered views, by token
         self.sheets: list[Sheet] = []
         self.formulas: dict[int, Formula] = {}
         self._fid = itertools.count(1)
@@ -161,6 +169,7 @@ class Workbook:
             "scripts": [
                 {"id": x["id"], "name": x.get("name"), "kind": x.get("kind", "macro")} for x in self.scripts
             ],
+            "match_mode": self.match_mode,
             "scripts_trusted": self._scripting.trusted if self._scripting is not None else True,
             "custom_functions": sorted(self.custom_functions),
             "custom_function_docs": {
@@ -182,6 +191,8 @@ class Workbook:
                 continue
             h, w = f.spill or (1, 1)
             entry = {"id": f.id, "row": f.row, "col": c, "kind": f.kind, "error": f.error, "h": h, "w": w}
+            if f.match:
+                entry["match"] = f.match
             if f.kind == "column":
                 entry["row_end"] = f.row_end if f.row_end is not None else sh.nrows
                 entry["text"] = f.text
@@ -445,6 +456,7 @@ class Workbook:
         rows: list[int] = []
         cells: list[list] = []
         flags: list = []
+        rid_at: dict[int, int] = {}
         for v in range(r0, r1):
             if v == 0:
                 rows.append(0)
@@ -456,11 +468,13 @@ class Workbook:
                 cells.append([None] * n)
                 continue
             rows.append(rec[0] + 1)
+            rid_at[rec[0]] = len(rows) - 1
             cells.append([to_json(x) for x in rec[1 : n + 1]])
             for k, val in enumerate(rec[n + 1 :]):
                 if val is not None and val is not False:
                     kind, j, idx = extra["meta"][k]
                     flags.append([len(rows) - 1, j, kind, idx if kind != "scale" else to_json(val), idx])
+        self._match_flags(sh, cols, rid_at, flags)
         return {
             "sheet": sh.id,
             "version": sh.version,
@@ -470,6 +484,32 @@ class Workbook:
             "cells": cells,
             "flags": flags,
         }
+
+    def _match_flags(self, sh: Sheet, cols: list[Column], rid_at: dict[int, int], flags: list):
+        """Markers for cells whose lookup matched only after normalising formats."""
+        if not rid_at:
+            return
+        col_pos = {c.id: j for j, c in enumerate(cols)}
+        owners = {
+            f.id: f
+            for f in self.formulas.values()
+            if f.sheet_id == sh.id and f.col_id in col_pos and f.match and f.match.get("fuzzy")
+        }
+        if not owners:
+            return
+        lo, hi = min(rid_at), max(rid_at)
+        hits = self.con.execute(
+            f"SELECT fid, rid FROM {MATCH_FLAGS} WHERE fid IN ({', '.join(map(str, owners))}) "
+            f"AND rid BETWEEN {lo} AND {hi}"
+        ).fetchall()
+        excluded = {
+            fid: set(f.exceptions) for fid, f in owners.items() if f.kind == "column" and f.exceptions
+        }
+        for fid, rid in hits:
+            f = owners[fid]
+            if rid not in rid_at or rid + 1 in excluded.get(fid, ()):
+                continue
+            flags.append([rid_at[rid], col_pos[f.col_id], "fmt", f.match.get("mode"), fid])
 
     def _cell_flags_sql(self, sh: Sheet, cols: list[Column]) -> dict:
         """Extra boolean columns for conditional formatting and validation in a viewport."""
@@ -536,6 +576,7 @@ class Workbook:
                     "anchor": cell_name(f.row, col),
                     "row": f.row,
                     "row_end": f.row_end if f.row_end is not None else sh.nrows,
+                    "skipped": len(set(f.exceptions)),
                     "error": f.error,
                 }
             else:
@@ -654,12 +695,24 @@ class Workbook:
             del self.formulas[fid]
 
     def set_range(
-        self, sheet_id: str, row: int, col: int, values: list[list[Any]], label: str = "Paste"
+        self,
+        sheet_id: str,
+        row: int,
+        col: int,
+        values: list[list[Any]],
+        label: str = "Paste",
+        view: bool = False,
     ) -> dict:
-        """Write a block of user input (e.g. a paste).  Formulas are allowed."""
+        """Write a block of user input (e.g. a paste).  Formulas are allowed.  With ``view`` on a
+        filtered sheet, ``row`` is a visual row and each line goes to the next *visible* row."""
         sh = self.sheet(sheet_id)
         if not values:
             return {"ok": True}
+        if view and sh.view_table:
+            rows = self._view_rows_from(sh, row, len(values))
+            res = self._set_rows(sh, rows, col, values, label)
+            res["skipped"] = len(values) - len(rows)
+            return res
         h = len(values)
         w = max(len(r) for r in values)
         self._begin(label, [(sh.id, "rect", row, row + h - 1)])
@@ -699,8 +752,22 @@ class Workbook:
         self._touch(sh)
         return {"ok": True}
 
-    def clear_range(self, sheet_id: str, r1: int, c1: int, r2: int, c2: int, what: str = "contents") -> dict:
+    def clear_range(
+        self,
+        sheet_id: str,
+        r1: int,
+        c1: int,
+        r2: int,
+        c2: int,
+        what: str = "contents",
+        view: bool = False,
+        rows: list[int] | None = None,
+    ) -> dict:
         sh = self.sheet(sheet_id)
+        if rows is not None:
+            return self._clear_rows(sh, rows, c1, c2, what)
+        if view and sh.view_table:
+            return self._clear_rows(sh, self._view_rows(sh, r1, r2), c1, c2, what)
         r2 = min(r2, sh.nrows)
         c2 = min(c2, len(sh.columns) - 1)
         if c2 < c1 or r2 < r1:
@@ -724,6 +791,32 @@ class Workbook:
         self.recalc([(sh.id, c1, c2, r1, r2)])
         self._touch(sh)
         return {"ok": True}
+
+    def _rows_text(self, sh: Sheet, rows: list[int], c1: int, c2: int, limit: int) -> dict:
+        if len(rows) * (c2 - c1 + 1) > limit:
+            raise EngineError("Selection is too large to copy to the clipboard. Use Export instead.")
+        cols = sh.columns[c1 : c2 + 1]
+        lines = ["\t".join(c.name for c in cols)] if rows and rows[0] == 0 else []
+        data = [r for r in rows if r >= 1]
+        if data:
+            m = self._rowmap(data)
+            try:
+                sel = ", ".join(txt(S("t." + q(c.id), c.typ)) for c in cols)
+                for row in self.con.execute(
+                    f"SELECT {sel} FROM {q(sh.table)} t JOIN {m} m ON m.rid = t.__rid ORDER BY m.i"
+                ).fetchall():
+                    lines.append(
+                        "\t".join(
+                            "" if v is None else str(v).replace("\t", " ").replace("\n", " ") for v in row
+                        )
+                    )
+            finally:
+                self.con.execute(f"DROP TABLE IF EXISTS {m}")
+        token = f"k{next(self._tmp)}"
+        self._clips[token] = rows
+        while len(self._clips) > 8:
+            self._clips.pop(next(iter(self._clips)))
+        return {"tsv": "\n".join(lines), "rows": len(lines), "token": token}
 
     def _drop_formulas_in(self, sh: Sheet, r1: int, r2: int, c1: int, c2: int, whole_cols: bool = False):
         ids = {sh.columns[c].id for c in range(c1, min(c2, len(sh.columns) - 1) + 1)}
@@ -758,10 +851,11 @@ class Workbook:
             self.con.execute(f"INSERT INTO {q(sh.table)} (__rid) SELECT range FROM range({sh.nrows}, {need})")
             sh.nrows = need
 
-    def _outside_nonnull(self, sh: Sheet, col: Column, rid1: int, rid2: int) -> int:
-        return self.con.execute(
-            f"SELECT count({q(col.id)}) FROM {q(sh.table)} WHERE __rid < {rid1} OR __rid > {rid2}"
-        ).fetchone()[0]
+    def _outside_nonnull(
+        self, sh: Sheet, col: Column, rid1: int, rid2: int, inside: str | None = None
+    ) -> int:
+        where = f"NOT ({inside})" if inside else f"__rid < {rid1} OR __rid > {rid2}"
+        return self.con.execute(f"SELECT count({q(col.id)}) FROM {q(sh.table)} WHERE {where}").fetchone()[0]
 
     def _retype(self, sh: Sheet, col: Column, new: str, clear: bool = False):
         new = norm_duck(new)
@@ -776,14 +870,17 @@ class Workbook:
         self.con.execute(f"ALTER TABLE {q(sh.table)} ALTER {q(col.id)} TYPE {new} USING {using}")
         col.duck = new
 
-    def _prepare_col(self, sh: Sheet, col: Column, duck: str | None, rid1: int, rid2: int) -> str:
-        """Make ``col`` able to hold values of ``duck`` in rows rid1..rid2; returns the column type."""
+    def _prepare_col(
+        self, sh: Sheet, col: Column, duck: str | None, rid1: int, rid2: int, inside: str | None = None
+    ) -> str:
+        """Make ``col`` able to hold values of ``duck`` in rows rid1..rid2 (or the rows matching
+        the SQL condition ``inside``); returns the column type."""
         if duck is None:
             return col.duck
         duck = norm_duck(duck)
         if col.duck.upper() == duck:
             return col.duck
-        if self._outside_nonnull(sh, col, rid1, rid2) == 0:
+        if self._outside_nonnull(sh, col, rid1, rid2, inside) == 0:
             self._retype(sh, col, duck, clear=True)
             return col.duck
         merged = merge_duck(col.duck, duck)
@@ -823,7 +920,9 @@ class Workbook:
             else:
                 self._bulk_update(sh, column, target, rid1, colvals)
 
-    def _bulk_update(self, sh: Sheet, column: Column, target: str, rid1: int, colvals: list):
+    def _bulk_update(
+        self, sh: Sheet, column: Column, target: str, rid1: int, colvals: list, rid_map: str | None = None
+    ):
         import pyarrow as pa
 
         tmp = f"__w{next(self._tmp)}"
@@ -851,9 +950,14 @@ class Workbook:
                 conv = "TRY_CAST(s.v AS BOOLEAN)"
             else:
                 conv = f"TRY_CAST(s.v AS {target})"
+            src = (
+                f"{tmp} s"
+                if rid_map is None
+                else (f"(SELECT m.rid AS i, x.v FROM {tmp} x JOIN {rid_map} m ON m.i = x.i) s")
+            )
+            off = f" + {rid1}" if rid_map is None else ""
             self.con.execute(
-                f"UPDATE {q(sh.table)} AS t SET {q(column.id)} = {conv} FROM {tmp} s "
-                f"WHERE t.__rid = s.i + {rid1}"
+                f"UPDATE {q(sh.table)} AS t SET {q(column.id)} = {conv} FROM {src} WHERE t.__rid = s.i{off}"
             )
         finally:
             self.unregister(tmp)
@@ -1036,6 +1140,9 @@ class Workbook:
             del self.formulas[f.id]
             return
         f.error = None
+        if f.match is not None:
+            self.con.execute(f"DELETE FROM {MATCH_FLAGS} WHERE fid = ?", [f.id])
+        f.match = None
         try:
             ast = P.parse_formula(f.text)
             mode = "row" if f.kind == "column" else "cell"
@@ -1054,6 +1161,7 @@ class Workbook:
                 res = self.con.execute(f"SELECT {val.sql}").fetchone()[0]
                 duck = self._duck_of(val)
                 self._write_cells(sh, f.row, c, [[res]], [duck if res is not None else None])
+            self._match_stats(sh, f, comp)
         except FormulaError as e:
             f.error = e.code + (f" {e.message}" if e.message else "")
             self._write_error(f)
@@ -1066,6 +1174,99 @@ class Workbook:
             f.error = f"{code} {msg[:300]}"
             self._write_error(f)
 
+    def _match_stats(self, sh: Sheet, f: Formula, comp: Compiler):
+        """Count how this formula's lookups matched and remember rows matched only after
+        normalising formats (they get a marker in the grid)."""
+        self.con.execute(f"DELETE FROM {MATCH_FLAGS} WHERE fid = ?", [f.id])
+        f.match = None
+        probes, notes = comp.match_probes, comp.notes
+        if not probes and not notes:
+            return
+        m: dict[str, Any] = {"mode": self.match_mode, "exact": 0, "fuzzy": 0, "missing": 0, "blank": 0}
+        if probes:
+            fz = " OR ".join(f"coalesce({p} = 1, FALSE)" for p in probes)
+            miss = " AND ".join(f"({p}) IS NULL" for p in probes)
+            blank = " AND ".join(f"coalesce({p} = -1, FALSE)" for p in probes)
+            counts = (
+                "count(*) FILTER (WHERE fz), count(*) FILTER (WHERE miss AND NOT fz), "
+                "count(*) FILTER (WHERE blank AND NOT fz AND NOT miss), count(*)"
+            )
+            try:
+                if f.kind == "column":
+                    tmp = f"__ms{next(self._tmp)}"
+                    self.con.execute(
+                        f"CREATE OR REPLACE TEMP TABLE {tmp} AS SELECT t.__rid AS rid, ({fz}) AS fz, "
+                        f"({miss}) AS miss, ({blank}) AS blank FROM {q(sh.table)} AS t "
+                        f"WHERE {self._colf_cond(sh, f)}"
+                    )
+                    try:
+                        nf, nm, nb, n = self.con.execute(f"SELECT {counts} FROM {tmp}").fetchone()
+                        if nf:
+                            self.con.execute(
+                                f"INSERT INTO {MATCH_FLAGS} SELECT {f.id}, rid FROM {tmp} WHERE fz"
+                            )
+                    finally:
+                        self.con.execute(f"DROP TABLE IF EXISTS {tmp}")
+                else:
+                    nf, nm, nb, n = self.con.execute(
+                        f"SELECT {counts} FROM (SELECT ({fz}) AS fz, ({miss}) AS miss, ({blank}) AS blank)"
+                    ).fetchone()
+                    if nf and f.row >= 1:
+                        self.con.execute(f"INSERT INTO {MATCH_FLAGS} VALUES (?, ?)", [f.id, f.row - 1])
+            except duckdb.Error:
+                return
+            m.update(fuzzy=nf, missing=nm, blank=nb, exact=n - nf - nm - nb)
+        for note in notes:
+            if note.get("fn") == "FILTER":
+                m["filter_fuzzy"] = m.get("filter_fuzzy", 0) + note["fuzzy"]
+        f.match = m
+
+    def set_match_mode(self, mode: str) -> dict:
+        if mode not in MATCH_MODES:
+            raise EngineError(f"Unknown matching mode {mode!r}")
+        if mode != self.match_mode:
+            self.match_mode = mode
+            self.recalc(None)
+            self.version += 1
+            self.dirty = True
+            self._cache.clear()
+            for sh in self.sheets:
+                sh.version += 1
+        return {"match_mode": self.match_mode}
+
+    def match_summary(self) -> dict:
+        """Lookup diagnostics for every formula, for the "Check lookups" panel."""
+        out = []
+        for f in self.formulas.values():
+            if not f.match:
+                continue
+            try:
+                sh = self.sheet(f.sheet_id)
+                c = sh.col_index(f.col_id)
+            except (EngineError, KeyError):
+                continue
+            out.append(
+                {
+                    "id": f.id,
+                    "sheet": sh.id,
+                    "sheet_name": sh.name,
+                    "row": f.row,
+                    "col": c,
+                    "ref": cell_name(f.row, c),
+                    "text": f.text,
+                    "kind": f.kind,
+                    **f.match,
+                }
+            )
+        return {"mode": self.match_mode, "formulas": out}
+
+    def fuzzy_rows(self, fid: int, limit: int = 200) -> list[int]:
+        """Sheet rows where formula ``fid`` matched only after normalising formats."""
+        rows = self.con.execute(
+            f"SELECT rid FROM {MATCH_FLAGS} WHERE fid = ? ORDER BY rid LIMIT {int(limit)}", [fid]
+        ).fetchall()
+        return [r[0] + 1 for r in rows]
+
     def _duck_of(self, v: S) -> str:
         return {NUM: "DOUBLE", STR: "VARCHAR", "bool": "BOOLEAN", "date": "DATE", "ts": "TIMESTAMP"}.get(
             v.typ, "VARCHAR"
@@ -1076,7 +1277,13 @@ class Workbook:
         if f.row_end is not None:
             cond += f" AND t.__rid <= {f.row_end - 1}"
         ex = sorted({r - 1 for r in f.exceptions if r >= 1})
-        if ex:
+        if len(ex) > 200:
+            # long lists (e.g. rows hidden by a filter during a fill) as an anti-join: a literal
+            # NOT IN list of 100k+ numbers takes DuckDB minutes to plan
+            name = f"__ex_{f.id}"
+            self.con.execute(f"CREATE OR REPLACE TEMP TABLE {name} AS SELECT unnest(?::BIGINT[]) AS r", [ex])
+            cond += f" AND t.__rid NOT IN (SELECT r FROM {name})"
+        elif ex:
             cond += f" AND t.__rid NOT IN ({', '.join(map(str, ex))})"
         return cond
 
@@ -1287,9 +1494,11 @@ class Workbook:
 
     # ------------------------------------------------------ fill & copy/paste
 
-    def fill(self, sheet_id: str, src: list[int], dst: list[int]) -> dict:
+    def fill(self, sheet_id: str, src: list[int], dst: list[int], view: bool = False) -> dict:
         """Fill handle: extend ``src`` [r1,c1,r2,c2] to cover ``dst`` (a superset rectangle)."""
         sh = self.sheet(sheet_id)
+        if view and sh.view_table:
+            return self._fill_view(sh, src, dst)
         sr1, sc1, sr2, sc2 = src
         dr1, dc1, dr2, dc2 = dst
         self._begin("Fill", [(sh.id, "rect", dr1, dr2)] if dr2 - dr1 < 50000 else [(sh.id, "table")])
@@ -1389,12 +1598,14 @@ class Workbook:
         self.recalc([(sh.id, c, c, lo, hi)])
 
     def get_range_text(
-        self, sheet_id: str, r1: int, c1: int, r2: int, c2: int, limit: int = 2_000_000
+        self, sheet_id: str, r1: int, c1: int, r2: int, c2: int, limit: int = 2_000_000, view: bool = False
     ) -> dict:
         sh = self.sheet(sheet_id)
         c2 = min(c2, len(sh.columns) - 1)
         if c2 < c1:
             return {"tsv": "", "rows": 0}
+        if view and sh.view_table:
+            return self._rows_text(sh, self._view_rows(sh, r1, r2), c1, c2, limit)
         if (r2 - r1 + 1) * (c2 - c1 + 1) > limit:
             raise EngineError("Selection is too large to copy to the clipboard. Use Export instead.")
         lines = []
@@ -1412,10 +1623,30 @@ class Workbook:
                 )
         return {"tsv": "\n".join(lines), "rows": len(lines)}
 
-    def paste_internal(self, sheet_id: str, src: dict, row: int, col: int, mode: str = "all") -> dict:
-        """Paste a range copied inside the app: formulas shift, types are kept."""
+    def paste_internal(
+        self, sheet_id: str, src: dict, row: int, col: int, mode: str = "all", view: bool = False
+    ) -> dict:
+        """Paste a range copied inside the app: formulas shift, types are kept.  A source copied
+        from a filtered view (``src["token"]``) holds only its visible rows; with ``view`` the
+        rows land on the visible rows starting at visual row ``row``."""
         ssh = self.sheet(src["sheet"])
         sh = self.sheet(sheet_id)
+        src_rows = self._clips.get(src.get("token") or "")
+        if src_rows is None and src.get("view") and ssh.view_table:
+            src_rows = self._view_rows(ssh, src["r1"], src["r2"])
+        dst_view = bool(view and sh.view_table)
+        if src_rows is not None or dst_view:
+            if src_rows is None:
+                src_rows = list(range(src["r1"], min(src["r2"], ssh.nrows) + 1))
+            c2 = min(src["c2"], len(ssh.columns) - 1)
+            if dst_view:
+                dst_rows = self._view_rows_from(sh, row, len(src_rows))
+            else:
+                start = row
+                dst_rows = list(range(start, start + len(src_rows)))
+                if src_rows and src_rows[0] != 0 and start == 0:
+                    dst_rows = dst_rows[1:]
+            return self._paste_rows(ssh, sh, src_rows, dst_rows, src["c1"], c2, col, mode)
         r1, c1, r2, c2 = src["r1"], src["c1"], src["r2"], src["c2"]
         r2 = min(r2, ssh.nrows)
         c2 = min(c2, len(ssh.columns) - 1)
@@ -1564,8 +1795,10 @@ class Workbook:
         self._touch(sh)
         return {"ok": True}
 
-    def delete_rows(self, sheet_id: str, row1: int, row2: int) -> dict:
+    def delete_rows(self, sheet_id: str, row1: int, row2: int, view: bool = False) -> dict:
         sh = self.sheet(sheet_id)
+        if view and sh.view_table:
+            return self._delete_row_set(sh, self._view_rows(sh, row1, row2))
         row1 = max(row1, 1)
         row2 = min(row2, sh.nrows)
         if row2 < row1:
@@ -1734,6 +1967,455 @@ class Workbook:
         self._recalc_sheet(sh)
         self._touch(sh)
         return {"ok": True}
+
+    # ------------------------------------------------- filtered views: visible rows only
+    #
+    # With a filter on, the UI sends *visual* rows (``view=True``): 0 is the header and
+    # visual row v is the (v-1)-th visible data row.  Every edit made through a filtered
+    # view (clear, delete, paste, fill, format) touches only the rows the user can see.
+
+    def _view_rows(self, sh: Sheet, r1: int, r2: int) -> list[int]:
+        """Sheet rows shown at visual rows r1..r2 (ascending; 0 = header)."""
+        out = [0] if r1 <= 0 <= r2 else []
+        a, b = max(r1, 1) - 1, r2 - 1
+        if b < a:
+            return out
+        if sh.view_table:
+            rows = self.con.execute(
+                f"SELECT rid FROM {q(sh.view_table)} WHERE pos BETWEEN {a} AND {b} ORDER BY pos"
+            ).fetchall()
+            return out + [r[0] + 1 for r in rows]
+        return out + list(range(a + 1, min(b, sh.nrows - 1) + 2))
+
+    def _view_rows_from(self, sh: Sheet, vrow: int, count: int) -> list[int]:
+        """``count`` visible sheet rows starting at visual row ``vrow`` (fewer if the view ends)."""
+        out = []
+        if vrow <= 0:
+            out.append(0)
+            vrow = 1
+        need = count - len(out)
+        if need <= 0:
+            return out[:count]
+        if sh.view_table:
+            rows = self.con.execute(
+                f"SELECT rid FROM {q(sh.view_table)} WHERE pos >= {vrow - 1} ORDER BY pos LIMIT {need}"
+            ).fetchall()
+            return out + [r[0] + 1 for r in rows]
+        return out + list(range(vrow, vrow + need))
+
+    def view_rects(self, sheet_id: str, rects: list[list[int]]) -> list[list[int]]:
+        """Split visual rectangles into sheet-row rectangles covering only visible rows."""
+        sh = self.sheet(sheet_id)
+        if not sh.view_table:
+            return rects
+        out = []
+        for r1, c1, r2, c2 in rects:
+            for a, b in _runs(self._view_rows(sh, r1, r2)):
+                out.append([a, c1, b, c2])
+        return out
+
+    def _rowmap(self, rows: list[int], src: list[int] | None = None) -> str:
+        """Temp table (i, rid[, src]) mapping positions to sheet rows (rid = row - 1)."""
+        name = f"__rm{next(self._tmp)}"
+        if src is None:
+            self.con.execute(
+                f"CREATE OR REPLACE TEMP TABLE {name} AS SELECT unnest(range(?)) AS i, unnest(?::BIGINT[]) AS rid",
+                [len(rows), [r - 1 for r in rows]],
+            )
+        else:
+            self.con.execute(
+                f"CREATE OR REPLACE TEMP TABLE {name} AS SELECT unnest(range(?)) AS i, "
+                f"unnest(?::BIGINT[]) AS rid, unnest(?::BIGINT[]) AS src",
+                [len(rows), [r - 1 for r in rows], [r - 1 for r in src]],
+            )
+        return name
+
+    def _rows_scope(self, sh: Sheet, rows: list[int]) -> list:
+        lo, hi = min(rows), max(rows)
+        return [(sh.id, "table")] if hi - lo > 50000 else [(sh.id, "rect", lo, hi)]
+
+    def _clear_rows(self, sh: Sheet, rows: list[int], c1: int, c2: int, what: str) -> dict:
+        c2 = min(c2, len(sh.columns) - 1)
+        rows = sorted({r for r in rows if 0 <= r <= sh.nrows})
+        if c2 < c1 or not rows:
+            return {"ok": True, "rows": 0}
+        data = [r for r in rows if r >= 1]
+        self._begin("Clear", self._rows_scope(sh, rows))
+        if what in ("contents", "all"):
+            for a, b in _runs(data):
+                self._drop_formulas_in(sh, a, b, c1, c2)
+            if data:
+                m = self._rowmap(data)
+                try:
+                    sets = ", ".join(f"{q(sh.columns[c].id)} = NULL" for c in range(c1, c2 + 1))
+                    self.con.execute(f"UPDATE {q(sh.table)} SET {sets} WHERE __rid IN (SELECT rid FROM {m})")
+                finally:
+                    self.con.execute(f"DROP TABLE IF EXISTS {m}")
+            if rows[0] == 0:
+                for c in range(c1, c2 + 1):
+                    sh.columns[c].name = ""
+        if what in ("formats", "all"):
+            from .features import clear_styles
+
+            for a, b in _runs(rows):
+                clear_styles(sh, a, b, c1, c2)
+        self.recalc([(sh.id, c1, c2, rows[0], rows[-1])])
+        self._touch(sh)
+        return {"ok": True, "rows": len(rows)}
+
+    def _delete_row_set(self, sh: Sheet, rows: list[int]) -> dict:
+        rows = sorted({r for r in rows if 1 <= r <= sh.nrows})
+        if not rows:
+            return {"ok": True, "deleted": 0}
+        runs = _runs(rows)
+        if len(runs) == 1:
+            self.delete_rows(sh.id, *runs[0])
+            return {"ok": True, "deleted": len(rows)}
+        self._begin("Delete rows", [(sh.id, "table")])
+        m = self._rowmap(rows)
+        try:
+            self.con.execute(f"DELETE FROM {q(sh.table)} WHERE __rid IN (SELECT rid FROM {m})")
+        finally:
+            self.con.execute(f"DROP TABLE IF EXISTS {m}")
+        self.con.execute(
+            f"CREATE OR REPLACE TABLE {q(sh.table)} AS SELECT row_number() OVER (ORDER BY __rid) - 1 AS __rid, "
+            f"* EXCLUDE (__rid) FROM {q(sh.table)} ORDER BY __rid"
+        )
+        sh.nrows -= len(rows)
+        gone = set(rows)
+        shift = _shift_delete_set(rows)
+
+        def below(r: int) -> int:  # deleted rows above r
+            return bisect.bisect_left(rows, r)
+
+        for fid in [
+            f.id for f in self.formulas.values() if f.sheet_id == sh.id and f.kind == "cell" and f.row in gone
+        ]:
+            del self.formulas[fid]
+        self._rewrite_all_refs(sh, fn_rows=shift)
+        for f in list(self.formulas.values()):
+            if f.sheet_id != sh.id:
+                continue
+            if f.kind == "column":
+                res = shift(f.row, f.row_end, False)
+                if res is None:
+                    del self.formulas[f.id]
+                    continue
+                f.row, f.row_end = res
+                f.exceptions = [e - below(e) for e in f.exceptions if e not in gone]
+            else:
+                f.row -= below(f.row)
+        from .features import shift_rules_rows
+
+        shift_rules_rows(sh, lambda r1, r2: shift(r1, r2, False))
+        self._apply_filters(sh)
+        self._recalc_sheet(sh)
+        self._touch(sh)
+        return {"ok": True, "deleted": len(rows)}
+
+    def _set_rows(self, sh: Sheet, rows: list[int], col: int, values: list[list[Any]], label: str) -> dict:
+        """Write lines of user input to the given sheet rows (one line per row, in order)."""
+        values = values[: len(rows)]
+        rows = rows[: len(values)]
+        if not values:
+            return {"ok": True, "rows": 0}
+        w = max(len(r) for r in values)
+        self._begin(label, self._rows_scope(sh, rows))
+        self._ensure_cols(sh, col + w - 1)
+        self._ensure_rows(sh, max(rows))
+        data_rows = [r for r in rows if r >= 1]
+        for a, b in _runs(data_rows):
+            self._drop_formulas_in(sh, a, b, col, col + w - 1)
+        if rows[0] == 0:
+            self._drop_formulas_in(sh, 0, 0, col, col + w - 1)
+        new_formulas = []
+        parsed: list[list[Any]] = []
+        col_types: list[list[str | None]] = [[] for _ in range(w)]
+        header = None
+        for row, line in zip(rows, values, strict=True):
+            out = []
+            for j in range(w):
+                v = line[j] if j < len(line) else None
+                if isinstance(v, str) and v.startswith("=") and len(v) > 1:
+                    new_formulas.append(
+                        Formula(
+                            id=next(self._fid), sheet_id=sh.id, row=row, col_id=sh.columns[col + j].id, text=v
+                        )
+                    )
+                    out.append(None)
+                    continue
+                val, duck, _ = parse_input(v)
+                out.append(val)
+                if row >= 1:
+                    col_types[j].append(duck)
+            if row == 0:
+                header = out
+            else:
+                parsed.append(out)
+        if header is not None:
+            self._write_cells(sh, 0, col, [header], [None] * w)
+        if parsed:
+            self._write_rowlist(sh, data_rows, col, parsed, [common_type(t) for t in col_types])
+        for f in new_formulas:
+            self.formulas[f.id] = f
+        self.recalc([(sh.id, col, col + w - 1, rows[0], rows[-1])] + [f.id for f in new_formulas], mixed=True)
+        self._touch(sh)
+        return {"ok": True, "rows": len(rows)}
+
+    def _write_rowlist(self, sh: Sheet, rows: list[int], col: int, values: list[list[Any]], ducks: list):
+        """Like _write_cells, for data rows that need not be contiguous."""
+        m = self._rowmap(rows)
+        inside = f"__rid IN (SELECT rid FROM {m})"
+        try:
+            for j in range(max(len(r) for r in values)):
+                column = sh.columns[col + j]
+                target = self._prepare_col(sh, column, ducks[j] if j < len(ducks) else None, 0, 0, inside)
+                colvals = [r[j] if j < len(r) else None for r in values]
+                if target.upper() == "VARCHAR":
+                    colvals = [
+                        None if v is None else (v if isinstance(v, str) else value_to_text(v))
+                        for v in colvals
+                    ]
+                self._bulk_update(sh, column, target, 0, colvals, rid_map=m)
+        finally:
+            self.con.execute(f"DROP TABLE IF EXISTS {m}")
+
+    def _paste_rows(
+        self,
+        ssh: Sheet,
+        sh: Sheet,
+        src_rows: list[int],
+        dst_rows: list[int],
+        c1: int,
+        c2: int,
+        col: int,
+        mode: str,
+    ) -> dict:
+        """Internal paste mapping source row ``src_rows[i]`` onto ``dst_rows[i]``."""
+        pairs = list(zip(src_rows, dst_rows, strict=False))
+        skipped = len(src_rows) - len(pairs)
+        if not pairs:
+            return {"ok": True, "rows": 0, "skipped": skipped}
+        w = c2 - c1 + 1
+        cols = ssh.columns[c1 : c2 + 1]
+        self._begin("Paste", self._rows_scope(sh, [d for _, d in pairs]))
+        self._ensure_cols(sh, col + w - 1)
+        self._ensure_rows(sh, max(d for _, d in pairs))
+        data = [(s, d) for s, d in pairs if s >= 1 and d >= 1]
+        dmap = dict(pairs)
+        src_formulas = []
+        if mode != "values":
+            for f in self.formulas.values():
+                if f.sheet_id != ssh.id:
+                    continue
+                try:
+                    fc = ssh.col_index(f.col_id)
+                except KeyError:
+                    continue
+                if c1 <= fc <= c2:
+                    src_formulas.append((f, fc))
+        from .features import styles_in
+
+        style_runs = _pair_runs(pairs)
+        src_styles = []
+        if mode == "all":
+            for (sa, sb), (da, _db) in style_runs:
+                for st in styles_in(ssh, sa, sb, c1, c2):
+                    src_styles.append((st, da - sa))
+        m = self._rowmap([d for _, d in data], [s for s, _ in data]) if data else None
+        tmp = f"__cp{next(self._tmp)}"
+        try:
+            if m is not None:
+                self.con.execute(
+                    f"CREATE OR REPLACE TEMP TABLE {tmp} AS SELECT m.rid AS dst, "
+                    f"{', '.join('s.' + q(c.id) for c in cols)} FROM {q(ssh.table)} s JOIN {m} m ON m.src = s.__rid"
+                )
+            for da, db in _runs([d for _, d in pairs]):
+                self._drop_formulas_in(sh, da, db, col, col + w - 1)
+            for s, d in pairs:
+                if s == 0:  # copied header
+                    self._write_cells(sh, d, col, [[c.name for c in cols]], ["VARCHAR"] * w)
+            if m is not None:
+                inside = f"__rid IN (SELECT rid FROM {m})"
+                for j, sc in enumerate(cols):
+                    dcol = sh.columns[col + j]
+                    target = self._prepare_col(sh, dcol, sc.duck, 0, 0, inside)
+                    srcexpr = f"s.{q(sc.id)}"
+                    if target.upper() == "VARCHAR" and sc.duck.upper() != "VARCHAR":
+                        srcexpr = txt(S(srcexpr, sc.typ))
+                    self.con.execute(
+                        f"UPDATE {q(sh.table)} AS t SET {q(dcol.id)} = CAST({srcexpr} AS {target}) "
+                        f"FROM {tmp} s WHERE t.__rid = s.dst"
+                    )
+                    if sc.fmt and not dcol.fmt:
+                        dcol.fmt = sc.fmt
+            dc = col - c1
+            new_ids = []
+            for f, fc in src_formulas:
+                tcol = sh.columns[fc + dc].id
+                if f.kind == "cell":
+                    if f.row in dmap:
+                        d = dmap[f.row]
+                        nf = Formula(
+                            id=next(self._fid),
+                            sheet_id=sh.id,
+                            row=d,
+                            col_id=tcol,
+                            text=P.shift_formula(f.text, d - f.row, dc),
+                        )
+                        self.formulas[nf.id] = nf
+                        new_ids.append(nf.id)
+                    continue
+                end = f.row_end if f.row_end is not None else ssh.nrows
+                ex = set(f.exceptions)
+                covered = [(s, d) for s, d in data if f.row <= s <= end and s not in ex]
+                for _src, (da, db) in _pair_runs(covered):
+                    # a column formula's text is written for its first row; re-anchor it at ``da``
+                    nf = Formula(
+                        id=next(self._fid),
+                        sheet_id=sh.id,
+                        row=da,
+                        col_id=tcol,
+                        text=P.shift_formula(f.text, da - f.row, dc),
+                        kind="column" if db > da else "cell",
+                        row_end=db if db > da else None,
+                    )
+                    self.formulas[nf.id] = nf
+                    new_ids.append(nf.id)
+            for st, dr in src_styles:
+                st = dict(st)
+                st["r1"] += dr
+                st["r2"] = st["r2"] + dr if st.get("r2") is not None else None
+                st["c1"] += dc
+                st["c2"] += dc
+                sh.styles.append(st)
+        finally:
+            self.con.execute(f"DROP TABLE IF EXISTS {tmp}")
+            if m is not None:
+                self.con.execute(f"DROP TABLE IF EXISTS {m}")
+        lo, hi = min(d for _, d in pairs), max(d for _, d in pairs)
+        self.recalc([(sh.id, col, col + w - 1, lo, hi)] + new_ids)
+        self._touch(sh)
+        return {"ok": True, "rows": len(pairs), "skipped": skipped}
+
+    def _fill_view(self, sh: Sheet, src: list[int], dst: list[int]) -> dict:
+        """Fill handle on a filtered view: only visible rows receive the fill."""
+        sr1, sc1, sr2, sc2 = src
+        dr1, dc1, dr2, dc2 = dst
+        src_rows = self._view_rows(sh, sr1, sr2)
+        dst_rows = self._view_rows(sh, dr1, dr2)
+        if not src_rows or not dst_rows:
+            return {"ok": True}
+        self._begin("Fill", self._rows_scope(sh, dst_rows + src_rows))
+        self._ensure_cols(sh, dc2)
+        if dr2 > sr2 or dr1 < sr1:
+            srcset = set(src_rows)
+            below = [r for r in dst_rows if r not in srcset and r > src_rows[-1]]
+            above = [r for r in dst_rows if r not in srcset and r < src_rows[0]]
+            if 0 in above:
+                raise EngineError("Fill up into the header row is not supported")
+            for c in range(sc1, sc2 + 1):
+                for targets, up in ((below, False), (above, True)):
+                    if targets:
+                        self._fill_column_rows(sh, c, src_rows, targets, up)
+        else:
+            for r in src_rows:
+                for c in range(dc1, dc2 + 1):
+                    if sc1 <= c <= sc2:
+                        continue
+                    srcc = sc1 + (c - sc1) % (sc2 - sc1 + 1)
+                    f = self._formula_at(sh, r, srcc)
+                    self._drop_formulas_in(sh, r, r, c, c)
+                    if f is not None:
+                        base = f.text if f.kind == "cell" else P.shift_formula(f.text, r - f.row, 0)
+                        nf = Formula(
+                            id=next(self._fid),
+                            sheet_id=sh.id,
+                            row=r,
+                            col_id=sh.columns[c].id,
+                            text=P.shift_formula(base, 0, c - srcc),
+                        )
+                        self.formulas[nf.id] = nf
+                        self.recalc([nf.id], seeds_are_formulas=True)
+                    else:
+                        cell = self.get_cell(sh.id, r, srcc)
+                        value, duck, _ = parse_input(cell["input"]) if cell["input"] else (None, None, None)
+                        self._write_cells(sh, r, c, [[value]], [duck])
+            self.recalc([(sh.id, dc1, dc2, src_rows[0], src_rows[-1])])
+        self._touch(sh)
+        return {"ok": True}
+
+    def _fill_column_rows(self, sh: Sheet, c: int, src_rows: list[int], targets: list[int], up: bool):
+        col = sh.columns[c]
+        f = self._formula_at(sh, src_rows[0], c) if len(src_rows) == 1 else None
+        if f is not None:
+            srow = src_rows[0]
+            base = f.text if f.kind == "cell" else P.shift_formula(f.text, srow - f.row, 0)
+            start, end = (targets[0], srow) if up else (srow, targets[-1])
+            if start == 0:
+                raise EngineError("Fill down from the header row is not supported")
+            covered = set(targets) | {srow}
+            for a, b in _runs(sorted(covered)):
+                self._drop_formulas_in(sh, a, b, c, c)
+            hidden = [r for r in range(start, end + 1) if r not in covered]
+            nf = Formula(
+                id=next(self._fid),
+                sheet_id=sh.id,
+                row=start,
+                col_id=col.id,
+                text=P.shift_formula(base, start - srow, 0),
+                kind="column",
+                row_end=end,
+                exceptions=hidden,
+            )
+            self.formulas[nf.id] = nf
+            self.recalc([nf.id], seeds_are_formulas=True)
+            return
+        vals = []
+        for r in src_rows:
+            if r == 0:
+                vals.append(col.name)
+            else:
+                v = self.con.execute(
+                    f"SELECT {q(col.id)} FROM {q(sh.table)} WHERE __rid = ?", [r - 1]
+                ).fetchone()
+                vals.append(v[0] if v else None)
+        n = len(vals)
+        step = None
+        if n >= 2 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in vals):
+            diffs = {round(vals[i + 1] - vals[i], 9) for i in range(n - 1)}
+            if len(diffs) == 1:
+                step = diffs.pop()
+        for a, b in _runs(targets):
+            self._drop_formulas_in(sh, a, b, c, c)
+        cnt = len(targets)
+        m = self._rowmap(targets)
+        inside = f"__rid IN (SELECT rid FROM {m})"
+        try:
+            if step is not None:
+                expr = (
+                    f"CAST({vals[0]!r} AS DOUBLE) - ({cnt} - s.i) * {step!r}"
+                    if up
+                    else f"CAST({vals[-1]!r} AS DOUBLE) + (s.i + 1) * {step!r}"
+                )
+                self._prepare_col(sh, col, "DOUBLE", 0, 0, inside)
+                self.con.execute(
+                    f"UPDATE {q(sh.table)} AS t SET {q(col.id)} = {expr} FROM {m} s WHERE t.__rid = s.rid"
+                )
+            else:
+                ducks = {parse_input(value_to_input(v))[1] for v in vals if v is not None}
+                if len(ducks) == 1:
+                    self._prepare_col(sh, col, ducks.pop(), 0, 0, inside)
+                duck = col.duck
+                off = (-cnt) % n if up else 0
+                arr = ", ".join(f"TRY_CAST({duck_literal(v)} AS {duck})" for v in vals)
+                self.con.execute(
+                    f"UPDATE {q(sh.table)} AS t SET {q(col.id)} = TRY_CAST(([{arr}])[((s.i + {off}) % {n}) + 1] AS {duck}) "
+                    f"FROM {m} s WHERE t.__rid = s.rid"
+                )
+        finally:
+            self.con.execute(f"DROP TABLE IF EXISTS {m}")
+        self.recalc([(sh.id, c, c, targets[0], targets[-1])])
 
     # ------------------------------------------------------------------ filters
 
@@ -2067,6 +2749,54 @@ def _shift_insert(at: int, n: int):
         a2 = a + n if a is not None and a >= at else a
         b2 = b + n if b is not None and b >= at else b
         return a2, b2
+
+    return fn
+
+
+def _runs(rows: list[int]) -> list[tuple[int, int]]:
+    """Group ascending row numbers into (first, last) runs of consecutive rows."""
+    out: list[tuple[int, int]] = []
+    for r in rows:
+        if out and r == out[-1][1] + 1:
+            out[-1] = (out[-1][0], r)
+        else:
+            out.append((r, r))
+    return out
+
+
+def _pair_runs(pairs: list[tuple[int, int]]) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    """Group (src, dst) row pairs into runs where both sides advance by one."""
+    out: list[list[int]] = []
+    for s, d in pairs:
+        if out and s == out[-1][1] + 1 and d == out[-1][3] + 1:
+            out[-1][1], out[-1][3] = s, d
+        else:
+            out.append([s, s, d, d])
+    return [((a, b), (c, d)) for a, b, c, d in out]
+
+
+def _shift_delete_set(rows: list[int]):
+    """Reference shifter for deleting a sorted set of (not necessarily adjacent) rows."""
+    gone = set(rows)
+
+    def lt(r):
+        return bisect.bisect_left(rows, r)
+
+    def le(r):
+        return bisect.bisect_right(rows, r)
+
+    def fn(a, b, is_cell):
+        if a is None and b is None:
+            return a, b
+        if is_cell:
+            if a in gone:
+                return None
+            return a - lt(a), (b - lt(b) if b is not None else b)
+        na = a - lt(a) if a is not None else None
+        nb = b - le(b) if b is not None else None
+        if na is not None and nb is not None and nb < na:
+            return None
+        return na, nb
 
     return fn
 
