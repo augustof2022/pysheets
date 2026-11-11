@@ -1,3 +1,4 @@
+import { shiftingRanges } from "./formulaHints";
 import { rpc } from "./api";
 import { bumpDecimals, cellRef, colLetters } from "./format";
 import { BLOCK_C, BLOCK_R, type GridController } from "./grid/GridController";
@@ -163,13 +164,20 @@ export async function commitEdit(move: "down" | "up" | "right" | "left" | null =
   invalidate();
   refreshCell();
   if (res !== undefined && ed.text.startsWith("=")) lookupToast(sh.id, row, ed.c);
+  if (res !== undefined && fill === "column") shiftingRangesToast(sh.id, row, ed.c, ed.text);
   if (res !== undefined && ed.text.startsWith("=") && !fill && row >= 1 && suggestFill(ed.text, ed.r, row)) {
     const isCol = sh.formulas.some((f) => f.kind === "column" && f.col === ed.c && f.row <= row);
     if (!isCol) {
       dismissFillToasts();
       toast(sh.filtered ? "Apply this formula to the visible rows below?" : "Apply this formula to the whole column?", "info", {
         label: sh.filtered ? "Fill visible ⌃↵" : "Fill column ⌃↵",
-        run: () => (sh.filtered ? fillVisible(ed.r, ed.c) : call("cell.set", { sheet: sh.id, row, col: ed.c, value: ed.text, fill: "column" }).then(invalidate)),
+        run: () =>
+          sh.filtered
+            ? fillVisible(ed.r, ed.c)
+            : call("cell.set", { sheet: sh.id, row, col: ed.c, value: ed.text, fill: "column" }).then((r) => {
+                invalidate();
+                if (r !== undefined) shiftingRangesToast(sh.id, row, ed.c, ed.text);
+              }),
       });
     }
   }
@@ -385,6 +393,30 @@ async function fillVisible(r: number, c: number, r2 = r) {
   lookupToast(sh.id, sheetRow(r), c);
 }
 
+/**
+ * Filled down a column, A2:A2001 becomes A3:A2002, A4:A2003… so lower rows stop seeing the top
+ * of the lookup table. Point it out with a one-click fix (A$2:A$2001).
+ */
+function shiftingRangesToast(sheetId: string, row: number, col: number, formula: string) {
+  const hit = shiftingRanges(formula);
+  if (!hit) return;
+  const list = hit.ranges.slice(0, 2).join(", ") + (hit.ranges.length > 2 ? "…" : "");
+  toast(
+    `${list} move down one row per row as this formula fills the column, so lower rows don't see the top of the range.`,
+    "info",
+    {
+      label: "Fix ranges",
+      run: async () => {
+        const r = await call("cell.set", { sheet: sheetId, row, col, value: hit.fixed, fill: "column" }, { label: "Filling column" });
+        invalidate();
+        refreshCell();
+        if (r !== undefined) toast(`Ranges fixed: ${hit.fixed}`, "success");
+      },
+    },
+    12000,
+  );
+}
+
 export async function fillColumn() {
   const sh = currentSheet();
   const { cell, sel } = get();
@@ -396,7 +428,8 @@ export async function fillColumn() {
   }
   const row = sheetRow(sel.active.r);
   if (cell && cell.input.startsWith("=") && row >= 1) {
-    await call("cell.set", { sheet: sh.id, row, col: sel.active.c, value: cell.input, fill: "column" }, { label: "Filling column" });
+    const r = await call("cell.set", { sheet: sh.id, row, col: sel.active.c, value: cell.input, fill: "column" }, { label: "Filling column" });
+    if (r !== undefined) shiftingRangesToast(sh.id, row, sel.active.c, cell.input);
   } else {
     const r = toSheetRect(primaryRect());
     await call("range.fill", { sheet: sh.id, src: [r.r1, r.c1, r.r2, r.c2], dst: [r.r1, r.c1, Math.max(sh.nrows, r.r2), r.c2] });

@@ -636,13 +636,19 @@ class Compiler:
 
             lo = bound(max(r1, 1), ref.ar1) if ref.r1 is not None else "0"
             hi = bound(r2, ref.ar2) if r2 is not None else None
-            alias = self.alias("r")
-            where = [f"{alias}.__rid >= {lo}"]
-            if hi is not None:
-                where.append(f"{alias}.__rid <= {hi}")
-            base = Base(
-                f'"{sh.table}" AS {alias}', alias, where, f"{alias}.__rid", ("rel", sh.id, lo, hi, alias)
-            )
+            # ranges over the same moving window (e.g. A2:A2001 and B2:B2001 filled down) share
+            # one row source, so lookups across them stay a single keyed join instead of a
+            # per-row positional join of two numbered windows (seconds on large sheets)
+            rkey = ("rel", sh.id, lo, hi)
+            base = self._bases.get(rkey)
+            if base is None:
+                alias = self.alias("r")
+                where = [f"{alias}.__rid >= {lo}"]
+                if hi is not None:
+                    where.append(f"{alias}.__rid <= {hi}")
+                base = Base(f'"{sh.table}" AS {alias}', alias, where, f"{alias}.__rid", rkey)
+                self._bases[rkey] = base
+            alias = base.alias
             header = None
             return A(
                 base,
@@ -1551,6 +1557,8 @@ class Compiler:
                     where.append(exact)
         else:
             cmp = "<=" if mtype > 0 else ">="
+            # empty cells take no part in a sorted match (otherwise blanks below the data count as 0)
+            where.append(f"{col.sql} IS NOT NULL")
             where.append(compare(col, key, cmp).sql)
             agg = "max"
         if data is None:
@@ -1562,11 +1570,79 @@ class Compiler:
             return S(f"(CASE WHEN coalesce({heq}, FALSE) THEN 1 ELSE {data} END)", NUM)
         return S(data, NUM)
 
+    def _index_match(self, rng: A, args) -> S | A | None:
+        """``INDEX(result, MATCH(key, lookup, 0))`` compiled as one keyed lookup (like XLOOKUP).
+
+        The generic form nests MATCH's position subquery inside INDEX's row subquery, which the
+        database cannot turn into a join: as a column formula over a few hundred thousand rows
+        it took close to a minute (and re-ran whenever the looked-up data changed). When both
+        ranges cover the same rows the result is identical, so use the hash-join plan instead.
+        """
+        if len(args) < 2 or rng.inline is not None or rng.src is None:
+            return None
+        m = args[1]
+        if not (isinstance(m, P.Call) and m.name.upper() == "MATCH" and len(m.args) == 3):
+            return None
+        cnode = args[2] if len(args) > 2 else None
+        if cnode is None or isinstance(cnode, P.Blank):
+            c = 1
+        else:
+            cv = self.scalar(cnode)
+            if not cv.is_lit:
+                return None
+            c = int(cv.lit)
+        if c < 1 or c > rng.ncols:
+            return None
+        mtype = self.const_int(m.args[2], None)
+        if mtype not in (0, 1, -1):
+            return None
+        key_node = m.args[0]
+        if isinstance(key_node, P.Str) and ("*" in key_node.value or "?" in key_node.value):
+            return None  # wildcard keys keep MATCH's own handling
+        look = self.comp(m.args[1])
+        if not isinstance(look, A) or look.inline is not None or look.src is None or look.ncols != 1:
+            return None
+        a, b = rng.src, look.src
+        if (a.rid1, a.rid2, a.has_header) != (b.rid1, b.rid2, b.has_header):
+            return None  # different row spans: positions don't line up, keep the general form
+        if (rng.header is None) != (look.header is None):
+            return None
+        ret = A(rng.base, [rng.cols[c - 1]], header=[rng.header[c - 1]] if rng.header else None, src=rng.src)
+        base, (lk, rt) = self.align([self._rel(look), self._rel(ret)])
+        table = A(base, lk.cols + rt.cols)
+        key = self.comp(key_node)
+
+        def approx(k: S) -> S:
+            # same rule as MATCH type 1 / -1: the LAST row whose key is <= / >= the search key
+            tb = table.base
+            kc = lk.cols[0]
+            w = " AND ".join(
+                list(tb.where) + [f"{kc.sql} IS NOT NULL", compare(kc, k, "<=" if mtype > 0 else ">=").sql]
+            )
+            vcol = rt.cols[0]
+            return S(f"(SELECT arg_max({vcol.sql}, {tb.order}) FROM {tb.frm} WHERE {w})", vcol.typ)
+
+        def one(k: S) -> S:
+            if mtype != 0:
+                return approx(k)
+            out = self._lookup(table, lk.cols[0], rt.cols[0], k, 0)
+            if look.header is None or rng.header is None or out.typ != STR:
+                return out  # (number/date results keep their type; a header match stays blank)
+            # MATCH counts the header row as position 1, and INDEX(…, 1) returns the header
+            hk, hv = look.header[0], rng.header[c - 1]
+            heq = f"({exact_eq(hk, k)} OR {smart_eq(hk, k)})" if self.smart else exact_eq(hk, k)
+            return S(f"(CASE WHEN coalesce({heq}, FALSE) THEN {txt0(hv)} ELSE {out.sql} END)", STR)
+
+        return self.lift(one, [key])
+
     def fn_INDEX(self, args):
         self._args(args, 1, 3, "INDEX")
         rng = self.comp(args[0])
         if isinstance(rng, S):
             return rng
+        fast = self._index_match(rng, args)
+        if fast is not None:
+            return fast
         rnode = args[1] if len(args) > 1 else None
         cnode = args[2] if len(args) > 2 else None
         r_is_blank = rnode is None or isinstance(rnode, P.Blank)
@@ -1617,15 +1693,22 @@ class Compiler:
             if src is not None and b.key == (src.sheet.id, src.rid1, src.rid2):
                 x = self.alias("x")
                 colx = self.col_expr(src.sheet, src.cols[c], x)
-                return S(
+                out = S(
                     f'(SELECT {colx.sql} FROM "{src.sheet.table}" AS {x} WHERE {x}.__rid = '
                     f"{src.rid1} + CAST({num(r)} AS BIGINT) - 1 - {h})",
                     colx.typ,
                 )
-            frm, alias, cols = self.numbered(rng)
+            else:
+                frm, alias, cols = self.numbered(rng)
+                out = S(
+                    f"(SELECT {cols[c].sql} FROM {frm} WHERE {alias}.__p = CAST({num(r)} AS BIGINT) - {h})",
+                    cols[c].typ,
+                )
+            if not h or out.typ != STR:
+                return out
+            # a computed row of 1 (e.g. MATCH finding the header text) is the header row
             return S(
-                f"(SELECT {cols[c].sql} FROM {frm} WHERE {alias}.__p = CAST({num(r)} AS BIGINT) - {h})",
-                cols[c].typ,
+                f"(CASE WHEN CAST({num(r)} AS BIGINT) = 1 THEN {txt0(rng.header[c])} ELSE {out.sql} END)", STR
             )
 
         if len(col_sel) > 1:

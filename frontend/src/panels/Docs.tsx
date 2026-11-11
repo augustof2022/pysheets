@@ -234,6 +234,10 @@ const SECTIONS: Section[] = [
           Type a formula in the first data row and press <K>{MOD}+Enter</K> (or double-click the fill handle). It is applied to the whole column as a single database query: <C>=D2*E2</C> or <C>=COUNTIF(B:B, B2)</C> over 2,000,000 rows takes well under a second.
           Running totals like <C>=SUM($E$2:E2)</C> work too.
         </p>
+        <Tip>
+          <b>Lookups in column formulas:</b> use whole columns (<C>Other!A:A</C>) or fixed rows (<C>Other!A$2:A$5000</C>). A range like <C>Other!A2:A5000</C> moves down one row per row as the formula fills (row 3 searches A3:A5001…), so lower rows stop finding keys near the
+          top. PySheets warns about this after a fill and offers <b>Fix ranges</b>.
+        </Tip>
         <h3>Arrays and spilling</h3>
         <p>
           Functions that return several values spill into the cells below/right, as in Sheets and Excel 365: <C>FILTER</C>, <C>SORT</C>, <C>UNIQUE</C>, <C>QUERY</C>, <C>SEQUENCE</C>, <C>SPLIT</C>, <C>TRANSPOSE</C>, and <C>ARRAYFORMULA(B2:B*C2:C)</C>. If something is in the way you get{" "}

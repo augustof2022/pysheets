@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3
+- **Much faster INDEX/MATCH:** `INDEX(…, MATCH(…, 0))` as a column formula now runs as one keyed lookup, the same speed as VLOOKUP/XLOOKUP. Over 303,981 rows it went from 57 s to 0.13 s. Pasting, typing, clearing or deleting cells that such a formula looks at used to wait for that re-run (several seconds); it now takes a fraction of a second.
+- **Faster lookups with row-bounded ranges:** VLOOKUP / XLOOKUP / INDEX-MATCH over ranges like `Other!A2:A5000` in a column formula went from about 3 s (5 s after each edit) to under 0.3 s.
+- **Shifting ranges warning:** when a lookup formula is filled down a column and its ranges would move down one row per row (`A2:A5000` → `A3:A5001` …, so lower rows stop finding keys near the top), PySheets says so and offers **Fix ranges** (`A$2:A$5000`).
+- **MATCH with match type 1 / -1** ignores empty cells, as in Google Sheets (blank rows below the data used to count as 0), and INDEX/MATCH on a text column returns the header when the key is the header text.
+
 ## 0.5.2
 - **Formulas across tabs:** while typing a formula you can click other tabs and keep typing. The keyboard stays in the formula across as many tabs as you like, and clicking a tab no longer takes it away. The formula help card no longer blocks clicks on the grid: it fades when you point at it, and F1 shows or hides it.
 - **Formulas across files:** File → Use another file in formulas… adds the tabs of another .pysheets workbook, Excel, CSV or Parquet file to this workbook as linked tabs, so INDEX/MATCH, FILTER, VLOOKUP… can use data from both. Opening a second .pysheets file offers the same. When that file changes, PySheets offers Refresh; columns you add yourself are kept.
