@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.4
+- **Sign in with Google works out of the box:** the Google dialog shows a single **Sign in with Google** button. Pick your own account and allow read-only access. You no longer need a credentials.json from someone else first. You can still use your own credentials.json, an existing script folder or a service-account key under "Other ways to sign in".
+- **Privacy policy and terms:** see [PRIVACY.md](PRIVACY.md) and [TERMS.md](TERMS.md). PySheets only reads your sheets, keeps your login on your computer and sends nothing to anyone else.
+
 ## 0.5.3
 - **Much faster INDEX/MATCH:** `INDEX(…, MATCH(…, 0))` as a column formula now runs as one keyed lookup, the same speed as VLOOKUP/XLOOKUP. Over 303,981 rows it went from 57 s to 0.13 s. Pasting, typing, clearing or deleting cells that such a formula looks at used to wait for that re-run (several seconds); it now takes a fraction of a second.
 - **Faster lookups with row-bounded ranges:** VLOOKUP / XLOOKUP / INDEX-MATCH over ranges like `Other!A2:A5000` in a column formula went from about 3 s (5 s after each edit) to under 0.3 s.
